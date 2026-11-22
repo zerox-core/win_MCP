@@ -170,34 +170,38 @@ Claude Desktop、Cline、Continue、Cherry Studio、Cursor 这类都原生支持
 > **注意**：这类客户端一般支持 MCP 的审批表单（elicitation），所以写文件、跑命令时
 > 会在客户端弹确认框，跟飞书体验一致。
 
-### 手机端：豆包 App（实测支持自定义 MCP + 审批弹窗）
+### 豆包（桌面版「新建自定义连接器」，实测支持 MCP + 审批弹窗）
 
-豆包的 MCP 接入与桌面客户端同一套配置，只是入口在 App 里：
+豆包桌面版的连接器对话框由**本地电脑**发起请求（界面明示
+「自定义连接器仅支持在本地电脑中使用」），所以：
 
-1. 豆包 → 智能体/MCP 设置 → 添加自定义 MCP，类型选**远程（HTTP/SSE）**
-2. 填：
+- **豆包和 win_mcp 在同一台电脑上** → **不需要隧道**，URL 直接填
+  `http://127.0.0.1:3000/mcp`
+- 以后想让别的设备发起 → 才需要公网隧道（见第 1 步）
+
+按对话框字段逐项填：
 
 ```text
-URL:      https://<你的公网域名>/mcp
-Headers:  Authorization: Bearer <你的clientKey>
-          x-aily-user: owner        ← 必须等于 .env 的 OWNER_USER_ID
+服务器名称:     win_mcp
+传输类型:       HTTP
+服务器 URL:     http://127.0.0.1:3000/mcp
+自定义 Headers:
+  Authorization: Bearer <你的clientKey>
+  x-aily-user:   owner        ← 必须等于 .env 的 OWNER_USER_ID
 ```
 
-3. 保存后让豆包列一次工具，应看到 43 个；`ping` 验证连通。
+保存后让豆包列一次工具，应看到 43 个；`ping` 验证连通。
 
 **审批**：豆包能渲染 MCP 确认卡片，所以服务端保持严格策略即可——
 `DIRECTORY_APPROVAL_FALLBACK=deny`、`GIT_COMMAND_POLICY=approval` 都不用动。
-写文件、跑命令时 App 会弹确认，和飞书体验一致。
+写文件、跑命令时豆包会弹确认，和飞书体验一致。
 
 **身份模式选择**（`.env` 的 `AUTH_MODE`）：
 
-| 值 | 手机场景 | 说明 |
+| 值 | 体验 | 说明 |
 |---|---|---|
-| `header`（推荐配合上面的 `x-aily-user`） | 配置完即可用，无需 PIN | 信任请求头身份；clientKey 是唯一门槛 |
-| `pin` | 需在对话里让模型先调 `auth` 工具传 PIN | 多一道 PIN 门槛，但 PIN 会经过豆包服务器，自行权衡 |
-
-> 手机场景注意：电脑关机/隧道掉线，豆包就报连接失败，属正常。
-> 想让手机长期可用，把 win_mcp + cloudflared 配成开机自启服务。
+| `header`（推荐） | 配一次永久可用 | 信任 `x-aily-user` 请求头；门槛只剩 clientKey |
+| `pin` | 每次会话要先让模型调 `auth` 传 PIN | 多一道门槛，但 **PIN 会经过豆包服务器**，自行权衡 |
 
 ---
 
