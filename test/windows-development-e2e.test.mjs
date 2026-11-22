@@ -15,6 +15,7 @@ import path from "node:path";
 import test from "node:test";
 import net from "node:net";
 import { spawn } from "node:child_process";
+import { productionToolCount } from "./support/toolInventory.mjs";
 
 const projectDir = path.resolve(import.meta.dirname, "..");
 
@@ -82,7 +83,7 @@ test("windows_development is registered and callable over HTTP", async () => {
     const listPayload = parseMcp(await listResp.text());
     const toolNames = listPayload.result.tools.map((t) => t.name);
     assert.ok(toolNames.includes("windows_development"), "windows_development must be registered");
-    assert.equal(new Set(toolNames).size, 42, "exactly 42 tools");
+    assert.equal(new Set(toolNames).size, productionToolCount(), "exactly the expected tool count");
   } finally {
     await stop(child);
     await rm(root, { recursive: true, force: true });

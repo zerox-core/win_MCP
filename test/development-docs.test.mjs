@@ -184,21 +184,26 @@ test("all scripts referenced in docs actually exist", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 9. Tool inventory number is 37 in README
+// 9. README tool count matches the real inventory
 // ---------------------------------------------------------------------------
-test("README states 42 tools and documents resumable text transfer", () => {
+test("README states the real tool count and documents resumable text transfer", async () => {
+  const { productionToolCount } = await import("./support/toolInventory.mjs");
+  const expected = productionToolCount();
   assert.ok(
-    /42\s*(个|tools?|工具)/i.test(README),
-    "README should state 42 tools",
+    new RegExp(`${expected}\\s*(个|tools?|工具)`, "i").test(README),
+    `README should state ${expected} tools (the actual BASE_TOOL_NAMES length)`,
   );
   assert.match(README, /manage_text_transfer/);
   assert.match(README, /48\s*KiB/);
   assert.match(README, /edit_file/);
-  // Old count should not appear
-  assert.ok(
-    !/21\s*(个|tools?|工具)/.test(README),
-    "README should not still say 21 tools",
-  );
+  // Old counts should not appear
+  for (const stale of [21, 36, 42]) {
+    if (stale === expected) continue;
+    assert.ok(
+      !new RegExp(`${stale}\\s*(个|tools?|工具)`).test(README),
+      `README should not still say ${stale} tools`,
+    );
+  }
 });
 
 test("README documents an isolated test MCP environment", () => {

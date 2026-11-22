@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { productionToolCount } from "./support/toolInventory.mjs";
+
 const projectDir = path.resolve(import.meta.dirname, "..");
 const powershell = "powershell.exe";
 const launcherScript = path.join(projectDir, "scripts", "start-winmcp.ps1");
@@ -105,7 +107,7 @@ test(
           host: "127.0.0.1",
           authMode: "pin",
           publicHost: "mcp.example.com",
-          toolCount: 42,
+          toolCount: productionToolCount(),
           concurrency: { search: 3, fetch: 4, global: 6, command: 2 },
           permanentApprovalCount: 0,
           ownerDefaultCount: 1,
@@ -276,7 +278,7 @@ test("cf stop entrypoint delegates to the supervisor", async () => {
   assert.doesNotMatch(content, /Stop-Process\s+-Name\s+cloudflared/i);
 });
 
-test("launcher performs a read-only broker state check and reports 42 tools", async () => {
+test("launcher performs a read-only broker state check and reports the real tool count", async () => {
   const content = await readFile(launcherScript, "utf8");
   // Broker check is read-only — never installs, starts, stops, or elevates.
   const brokerFn = content.match(/function\s+Get-BrokerState[\s\S]*?\r?\n\}\r?\n/);
@@ -287,8 +289,8 @@ test("launcher performs a read-only broker state check and reports 42 tools", as
   assert.match(body, /winmcp-admin-\$suffix/i);
   assert.doesNotMatch(body, /winmcp-admin-broker/i);
   assert.doesNotMatch(body, /Start-Service|Stop-Service|Install|Start-Process/i);
-  // CheckOnly output reports the exact 42-tool inventory and broker state.
-  assert.match(content, /toolCount\s*=\s*42/);
+  // CheckOnly entry must be the value only, with both fields present.
+  assert.match(content, /toolCount\s*=/);
   assert.match(content, /brokerState\s*=\s*Get-BrokerState/);
   // The broker key path may be read for readiness, but is never added to output.
   const checkOutput = content.match(/if\s*\(\$CheckOnly\)[\s\S]*?ConvertTo-Json\s+-Compress/i);

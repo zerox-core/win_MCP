@@ -124,7 +124,7 @@ npm start
 Invoke-RestMethod http://127.0.0.1:3000/health
 ```
 
-正常时应返回 `status: ok`，并报告 42 个工具。若你使用 Clash Fake-IP，对公网
+正常时应返回 `status: ok`，并报告 43 个工具。若你使用 Clash Fake-IP，对公网
 `/health` 的回访失败只说明反向探测受限；本地服务和连接器仍可正常工作。
 
 ### 5. 先选择公网传输
@@ -235,7 +235,7 @@ MCP，`Authorization` 应使用**固定值**，其参数值为 `Bearer <your-own
 检查这个 Windows 原生项目需要的 MSVC、Windows SDK 和 CMake 环境。
 ```
 
-## 能力概览：42 个工具
+## 能力概览：43 个工具
 
 工具清单由服务在 `tools/list` 中实际返回；Aily 的文字总结可能合并或漏列工具，
 应以该响应和 `/health` 为准。
@@ -243,6 +243,7 @@ MCP，`Authorization` 应使用**固定值**，其参数值为 `Bearer <your-own
 | 分组 | 工具 |
 |---|---|
 | 连通与授权 | `ping`、`auth`、`list_allowed_directories` |
+| 客户端管理 | `manage_clients`（owner 专用：列出已配对客户端，按 id 或 label 单独吊销） |
 | 文件与目录 | `read_file`、`write_file`、`edit_file`、`create_directory`、`list_directory`、`move_file`、`search_files`、`search_content`、`get_file_info`、`compare_files`、`apply_patch` |
 | 命令与 Git | `execute_command`、`git_status`、`git_diff` |
 | 结构化 Git | `git_workflow`（固定 Git 工作流 action） |
@@ -261,6 +262,16 @@ MCP，`Authorization` 应使用**固定值**，其参数值为 `Bearer <your-own
 而不是提交到 Git。
 
 `python_development` 用于受控的 Python 版本检查、脚本运行和 pytest 验证。它会优先选择工作目录下的 `.venv`，再回退到系统 launcher，不接受任意 shell 字符串或原始 pytest flags。
+
+`manage_clients`（owner 专用）用于管理已配对的客户端，可以不开终端直接在对话里操作：
+
+| action | 作用 |
+|---|---|
+| `list` | 列出已配对客户端（id、label、创建/最后使用时间）和配对码状态 |
+| `revoke` | 按 `id` 或 `label` 吊销一个客户端，其他客户端不受影响 |
+| `revoke_all` | 吊销全部客户端（所有客户端都要重新配对，慎用） |
+
+吊销立即生效：该客户端的密钥马上失效，无需重启。
 
 ## 构建与测试命令
 
@@ -337,7 +348,7 @@ OWNER_COMMAND_POLICY=direct
 
 ### Aily 的文字回答只列出一部分工具
 
-服务的 `/health` 与 `tools/list` 当前应返回 42 个工具。Aily 可能因平台安全策略只把
+服务的 `/health` 与 `tools/list` 当前应返回 43 个工具。Aily 可能因平台安全策略只把
 其中一部分交给智能体；如果没有 `execute_command`，请使用 `node_development` 完成四个
 受限的 PNPM 操作；如果要验证 Python 脚本或 pytest，请使用 `python_development`，而不要
 要求智能体改用任意 Shell。

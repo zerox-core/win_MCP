@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { bearer, pairClient } from "./support/clientKey.mjs";
+import { productionToolCount } from "./support/toolInventory.mjs";
 
 const projectDir = path.resolve(import.meta.dirname, "..");
 
@@ -84,8 +85,8 @@ test("health exposes redacted approval and concurrency summaries", async () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     assert(health, "health endpoint did not become ready");
-    assert.equal(health.toolCount, 42);
-    assert.equal(health.tools.length, 42);
+    assert.equal(health.toolCount, productionToolCount());
+    assert.equal(health.tools.length, productionToolCount());
     assert.deepEqual(
       Object.fromEntries(Object.entries(health.concurrency).map(([key, value]) => [key, value.limit])),
       { global: 7, command: 3, search: 4, fetch: 5, artifact: 6 },

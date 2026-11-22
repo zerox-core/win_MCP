@@ -56,7 +56,20 @@ foreach ($name in @("APPROVAL_DATA_DIR", "DEV_TASK_DATA_DIR", "LOCAL_WORKSPACE_C
     Assert-ChildPath $dataRoot $candidate $name
 }
 if ($CheckOnly) {
-    [pscustomobject]@{ status = "test-ready"; port = 3001; host = "127.0.0.1"; publicHost = "mcp-test.example.com"; toolCount = 42 } | ConvertTo-Json -Compress
+    # Derive the count from the build output: this instance runs managed, so it
+    # advertises restart_service on top of the base inventory.
+    $stToolCount = $null
+    $stIndex = Join-Path $projectDir "dist\index.js"
+    if (Test-Path -LiteralPath $stIndex -PathType Leaf) {
+        $stMatch = [regex]::Match(
+            (Get-Content -LiteralPath $stIndex -Raw),
+            'const BASE_TOOL_NAMES = \[(?<body>[\s\S]*?)\];'
+        )
+        if ($stMatch.Success) {
+            $stToolCount = [regex]::Matches($stMatch.Groups['body'].Value, '"[a-z0-9_]+"').Count + 1
+        }
+    }
+    [pscustomobject]@{ status = "test-ready"; port = 3001; host = "127.0.0.1"; publicHost = "mcp-test.example.com"; toolCount = $stToolCount } | ConvertTo-Json -Compress
     exit 0
 }
 
@@ -88,7 +101,19 @@ $server = [System.Diagnostics.Process]::Start($startInfo)
 try {
     $deadline = (Get-Date).AddSeconds(30)
     $headers = @{ Authorization = "Bearer $testToken" }
-    do { try { $health = Invoke-RestMethod -Uri "http://127.0.0.1:3001/health" -Headers $headers -TimeoutSec 2 } catch {}; if ($health.status -eq "ok" -and @($health.tools).Count -eq 42) { break }; Start-Sleep -Milliseconds 300 } while ((Get-Date) -lt $deadline)
+    # Managed instance: base inventory plus restart_service.
+    $expectedToolCount = $null
+    $readyIndex = Join-Path $projectDir "dist\index.js"
+    if (Test-Path -LiteralPath $readyIndex -PathType Leaf) {
+        $readyMatch = [regex]::Match(
+            (Get-Content -LiteralPath $readyIndex -Raw),
+            'const BASE_TOOL_NAMES = \[(?<body>[\s\S]*?)\];'
+        )
+        if ($readyMatch.Success) {
+            $expectedToolCount = [regex]::Matches($readyMatch.Groups['body'].Value, '"[a-z0-9_]+"').Count + 1
+        }
+    }
+    do { try { $health = Invoke-RestMethod -Uri "http://127.0.0.1:3001/health" -Headers $headers -TimeoutSec 2 } catch {}; if ($health.status -eq "ok" -and ($null -eq $expectedToolCount -or @($health.tools).Count -eq $expectedToolCount)) { break }; Start-Sleep -Milliseconds 300 } while ((Get-Date) -lt $deadline)
     if (-not $health) {
         if (-not $server.HasExited) { $server.Kill() }
         $stdout = $server.StandardOutput.ReadToEnd()

@@ -21,8 +21,10 @@ function Wait-LocalHealth([int]$Seconds = 45) {
     $deadline = (Get-Date).AddSeconds($Seconds)
     while ((Get-Date) -lt $deadline) {
         try {
+            # Unauthenticated /health is liveness-only (no tool inventory), so
+            # readiness is status + version rather than a tool count.
             $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 3
-            if ($health.status -eq "ok" -and @($health.tools).Count -ge 42) {
+            if ($health.status -eq "ok" -and $health.version) {
                 return $health
             }
         } catch {

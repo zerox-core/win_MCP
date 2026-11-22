@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { pairClient } from "./support/clientKey.mjs";
+import { productionToolCount } from "./support/toolInventory.mjs";
 
 const projectDir = path.resolve(import.meta.dirname, "..");
 
@@ -163,8 +164,8 @@ test("PIN authentication is isolated per request identity", async () => {
         headers: { authorization: `Bearer ${clientKey}` },
       })
     ).json();
-    assert.equal(fullHealth.toolCount, 42);
-    assert.equal(fullHealth.tools.length, 42);
+    assert.equal(fullHealth.toolCount, productionToolCount());
+    assert.equal(fullHealth.tools.length, productionToolCount());
     assert.deepEqual(Object.keys(fullHealth.concurrency).sort(), ["artifact", "command", "fetch", "global", "search"]);
     const fixedHostHealth = await rawHealthRequest(port, {
       host: "fixed-test.ngrok-free.dev",

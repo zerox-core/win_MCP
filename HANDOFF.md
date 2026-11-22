@@ -200,6 +200,17 @@ curl -X POST http://127.0.0.1:3000/clients/revoke `
 **安全设计**：注册表只存密钥的 SHA-256 摘要（`clients.json`），
 **不存明文**。所以即使这个文件泄露，也无法拿来当凭据用。
 
+**也可以在对话里做**（不用开终端）：`manage_clients` 是 owner 专用 MCP 工具：
+
+| action | 作用 |
+|---|---|
+| `list` | 列出已配对客户端 + 配对码状态 |
+| `revoke` | 配 `id` 或 `label`，吊销单个 |
+| `revoke_all` | 吊销全部（慎用） |
+
+在飞书里直接说「列出已配对的客户端」「吊销 laptop」即可。非 owner 调用会被
+`OWNER_REQUIRED` 拒绝。
+
 ### 3.4 配错了怎么办
 
 - **配对码过期/输错太多次** → 重启服务，会打印新的配对码。
@@ -266,7 +277,7 @@ src/
 │   ├── publicHostGuide.ts # 启动时 PUBLIC_HOST 交互式引导
 │   ├── atomicReplace.ts  # Windows 安全的 rename 重试（EPERM/EBUSY）
 │   └── logger.ts         # 结构化日志 + 敏感值脱敏
-├── tools/                # 35 个工具实现，每个对应一个 MCP tool
+├── tools/                # 43 个工具实现，每个对应一个 MCP tool
 ├── development/          # 开发任务子系统（任务队列、worker、工具链探测）
 │   ├── tasks/            # 任务协调器、worker 协议、心跳
 │   ├── android/          # ADB、Gradle、签名
@@ -562,7 +573,7 @@ CLOUDFLARE_CONFIG_PATH=%USERPROFILE%\.cloudflared\config.yml
 
 - [ ] `npm install && npm run build` 成功
 - [ ] `npx tsc --noEmit` 零错误
-- [ ] 测试跑通（`npm test`，969 个用例）
+- [ ] 测试跑通（`npm test`，983 个用例）
 - [ ] 能说清四层安全模型各挡什么
 - [ ] 说得出 `AUTH_MODE=none` 的风险
 - [ ] 知道改工具清单要同步哪三处

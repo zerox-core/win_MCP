@@ -9,20 +9,8 @@ import { randomBytes } from "node:crypto";
 import test from "node:test";
 
 const projectDir = path.resolve(import.meta.dirname, "..");
-const expectedTools = [
-  "ping", "read_file", "write_file", "edit_file", "create_directory",
-  "list_directory", "move_file", "search_files", "get_file_info",
-  "list_allowed_directories", "auth", "execute_command", "search_content",
-  "git_status", "git_diff", "git_workflow", "java_development", "compare_files", "apply_patch", "web_fetch",
-  "manage_binary_artifact", "manage_text_transfer", "todo_write", "todo_read", "ask_user",
-  "get_development_task", "list_development_tasks", "read_development_task_logs", "cancel_development_task",
-  "inspect_development_environment", "plan_environment_changes", "apply_environment_plan",
-  "android_development",
-  "windows_development", "node_development", "python_development",
-  "manage_development_project", "list_local_workspaces", "run_local_workflow",
-  "local_dev_server", "staging_android_verify",
-  "workspace_context",
-];
+// Imported rather than duplicated: the authoritative inventory is BASE_TOOL_NAMES.
+const { baseToolNames } = await import("./support/toolInventory.mjs");
 
 async function freePort() {
   const server = net.createServer();
@@ -164,7 +152,7 @@ test("complete development tools work over HTTP including input_required retries
       clientInfo: { name: "complete-e2e", version: "1.0.0" },
     });
     assert.equal(initialized.serverInfo.name, "win-mcp");
-    assert.deepEqual((await rpc("tools/list")).tools.map((tool) => tool.name), expectedTools);
+    assert.deepEqual((await rpc("tools/list")).tools.map((tool) => tool.name).sort(), baseToolNames().sort());
     assert.equal((await call("auth", { pin })).isError, undefined);
     assert.match((await call("ping", { message: "complete" })).content[0].text, /pong: complete/);
 

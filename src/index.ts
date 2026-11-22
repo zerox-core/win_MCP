@@ -70,6 +70,7 @@ import { DevelopmentTaskScheduler } from "./development/tasks/scheduler.js";
 import { DevelopmentTaskStore } from "./development/tasks/store.js";
 import { developmentOwnerKey } from "./development/tasks/ownerKey.js";
 import { registerAskUserTool } from "./tools/askUser.js";
+import { registerClientAdminTool } from "./tools/clientAdmin.js";
 import { registerCommandTool } from "./tools/command.js";
 import { concurrencySummary } from "./tools/concurrency.js";
 import { registerContentSearchTool } from "./tools/contentSearch.js";
@@ -135,10 +136,11 @@ const BASE_TOOL_NAMES = [
   "staging_android_verify",
   "workspace_context",
   "local_dev_server",
+  "manage_clients",
 ] as const;
 
 // Managed-launch marker: only the isolation launcher (start-test-mcp.mjs) injects it.
-// restart_service registers and advertises only on managed instances; production inventory stays 42.
+// restart_service registers and advertises only on managed instances.
 const MANAGED_LAUNCH = process.env["WINMCP_MANAGED_LAUNCH"] === "1";
 const TOOL_NAMES = MANAGED_LAUNCH
   ? [...BASE_TOOL_NAMES, "restart_service"]
@@ -315,6 +317,10 @@ function createMcpServer(): McpServer {
   registerTextTransferTool(server, textTransferService);
   registerTodoTools(server);
   registerAskUserTool(server);
+  registerClientAdminTool(server, {
+    clients: clientRegistry,
+    pairingStatus: () => pairingRegistry.status(),
+  });
   registerDevelopmentTaskTools(server, developmentTaskCoordinator);
   registerDevelopmentEnvironmentTools(server, developmentEnvironment);
   registerAndroidDevelopmentTool(server, {

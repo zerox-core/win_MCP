@@ -329,13 +329,26 @@ function Invoke-Launcher {
     }
 
     if ($CheckOnly) {
+        # Read the real inventory from the build output rather than a literal:
+        # a hardcoded count silently drifts every time a tool is added.
+        $toolCount = $null
+        $distIndex = Join-Path $projectDir "dist\index.js"
+        if (Test-Path -LiteralPath $distIndex -PathType Leaf) {
+            $match = [regex]::Match(
+                (Get-Content -LiteralPath $distIndex -Raw),
+                'const BASE_TOOL_NAMES = \[(?<body>[\s\S]*?)\];'
+            )
+            if ($match.Success) {
+                $toolCount = [regex]::Matches($match.Groups['body'].Value, '"[a-z0-9_]+"').Count
+            }
+        }
         [pscustomobject]@{
             status = "ready"
             port = $port
             host = $hostValue
             authMode = $authMode
             publicHost = $publicHost
-            toolCount = 42
+            toolCount = $toolCount
             brokerState = Get-BrokerState
             concurrency = @{
                 global = $maxConcurrentTools
@@ -383,11 +396,24 @@ function Invoke-Launcher {
             -PassThru
 
         $localHealthUrl = "http://127.0.0.1:$port/health"
+        # Unauthenticated /health is liveness-only by design, so require just the
+        # version and status here; the tool count comes from the build output.
         $localHealth = Wait-Json $localHealthUrl 30 $server
-        if ($localHealth.version -ne "1.0.0" -or @($localHealth.tools).Count -ne 42) {
-            throw "Local health response did not report version 1.0.0 and 42 tools"
+        if ($localHealth.status -ne "ok" -or $localHealth.version -ne "1.0.0") {
+            throw "Local health response did not report status ok and version 1.0.0"
         }
-        Write-Host "Local health passed (42 tools, auth mode $($localHealth.authMode))." -ForegroundColor Green
+        $localToolCount = $null
+        $checkIndex = Join-Path $projectDir "dist\index.js"
+        if (Test-Path -LiteralPath $checkIndex -PathType Leaf) {
+            $toolMatch = [regex]::Match(
+                (Get-Content -LiteralPath $checkIndex -Raw),
+                'const BASE_TOOL_NAMES = \[(?<body>[\s\S]*?)\];'
+            )
+            if ($toolMatch.Success) {
+                $localToolCount = [regex]::Matches($toolMatch.Groups['body'].Value, '"[a-z0-9_]+"').Count
+            }
+        }
+        Write-Host "Local health passed ($localToolCount tools advertised)." -ForegroundColor Green
 
         $mcpUrl = "https://$publicHost/mcp"
         try {
