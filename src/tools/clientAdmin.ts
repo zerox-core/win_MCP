@@ -23,17 +23,27 @@ import type { ClientRegistry } from "../security/clientPairing.js";
 import { logger } from "../security/logger.js";
 import { toolError, toolJson } from "./results.js";
 
+export interface PairingCodeSummary {
+  code: string;
+  display: string;
+  expiresAt: string;
+}
+
 export interface ClientAdminOptions {
   clients: ClientRegistry;
   /** Counts pending pairing codes so the user can see if a code is live. */
   pairingStatus: () => { pending: boolean; expiresAt?: string; lockedOut: boolean };
+  /** Issues a fresh one-time code, replacing any outstanding one. */
+  issueCode: () => PairingCodeSummary;
+  /** Absolute base URL used to print a copyable pairing command. */
+  publicBaseUrl: () => string;
 }
 
 export function createManageClientsTool(options: ClientAdminOptions) {
-  const { clients, pairingStatus } = options;
+  const { clients, pairingStatus, issueCode, publicBaseUrl } = options;
 
   return async function manageClients(
-    args: { action: "list" | "revoke" | "revoke_all"; id?: string; label?: string },
+    args: { action: "list" | "revoke" | "revoke_all" | "issue_code"; id?: string; label?: string },
   ) {
     if (args.action === "list") {
       const status = pairingStatus();
@@ -47,6 +57,26 @@ export function createManageClientsTool(options: ClientAdminOptions) {
           lockedOut: status.lockedOut,
         },
         hint: "Each client has its own key and can be revoked independently.",
+      });
+    }
+
+    if (args.action === "issue_code") {
+      // Issuing a code is how a new client is onboarded without restarting the
+      // server. The previous code (if any) stops working immediately. Query the
+      // prior state first — after issuing, a code is always pending.
+      const previousCodeExisted = pairingStatus().pending;
+      const issued = issueCode();
+      logger.info("pairing_code_issued_via_tool", { expiresAt: issued.expiresAt });
+      return toolJson({
+        ok: true,
+        code: issued.display,
+        expiresAt: issued.expiresAt,
+        pairEndpoint: `${publicBaseUrl()}/pair`,
+        pairCommand: `curl -X POST ${publicBaseUrl()}/pair -H "Content-Type: application/json" -d '{"code":"${issued.display}"}'`,
+        previousCodeReplaced: previousCodeExisted,
+        note:
+          "Single use and short lived. Enter it once in the new client to bind it. " +
+          "Already-paired clients are unaffected.",
       });
     }
 
@@ -98,10 +128,11 @@ export function registerClientAdminTool(
 
   server.registerTool("manage_clients", {
     description:
-      "List or revoke paired MCP clients. Each client has its own permanent key, so revoking one " +
-      "leaves the others working. Owner-only.",
+      "Manage paired MCP clients. `issue_code` prints a one-time pairing code so a new client can " +
+      "bind without restarting the server; `list` shows paired clients; `revoke` disconnects one " +
+      "(others keep working); `revoke_all` disconnects all. Owner-only.",
     inputSchema: {
-      action: z.enum(["list", "revoke", "revoke_all"]),
+      action: z.enum(["list", "revoke", "revoke_all", "issue_code"]),
       id: z.string().trim().min(1).max(64).optional()
         .describe("Client id from action=list. Use this or label."),
       label: z.string().trim().min(1).max(64).optional()

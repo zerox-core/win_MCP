@@ -26,6 +26,8 @@ async function withRegistry(run) {
     const manage = createManageClientsTool({
       clients,
       pairingStatus: () => pairing.status(),
+      issueCode: () => pairing.issue(),
+      publicBaseUrl: () => "http://127.0.0.1:3000",
     });
     await run({ clients, pairing, manage });
   } finally {
@@ -116,5 +118,63 @@ test("revoke_all on an empty registry is a harmless no-op", async () => {
     const body = parse(await manage({ action: "revoke_all" }));
     assert.equal(body.ok, true);
     assert.equal(body.removed, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// issue_code
+// ---------------------------------------------------------------------------
+
+test("issue_code returns a usable one-time code", async () => {
+  await withRegistry(async ({ manage }) => {
+    const body = parse(await manage({ action: "issue_code" }));
+    assert.equal(body.ok, true);
+    assert.match(body.code, /^[0-9A-Z]{4}-[0-9A-Z]{4}$/);
+    assert.ok(body.expiresAt);
+    assert.match(body.pairEndpoint, /\/pair$/);
+    assert.match(body.pairCommand, /curl -X POST/);
+    assert.equal(body.previousCodeReplaced, false);
+  });
+});
+
+test("a code from issue_code actually pairs a new client", async () => {
+  await withRegistry(async ({ clients, pairing, manage }) => {
+    const body = parse(await manage({ action: "issue_code" }));
+    // Redeem exactly as the HTTP endpoint would.
+    const outcome = pairing.redeem(body.code);
+    assert.equal(outcome.ok, true, "code must be redeemable");
+    clients.create("new-device");
+    assert.equal(clients.count(), 1);
+  });
+});
+
+test("issue_code replaces any outstanding code and reports it", async () => {
+  await withRegistry(async ({ pairing, manage }) => {
+    const first = parse(await manage({ action: "issue_code" }));
+    const second = parse(await manage({ action: "issue_code" }));
+
+    assert.notEqual(second.code, first.code);
+    assert.equal(second.previousCodeReplaced, true);
+    // The superseded code must no longer work.
+    assert.equal(pairing.redeem(first.code).ok, false);
+    assert.equal(pairing.redeem(second.code).ok, true);
+  });
+});
+
+test("issue_code does not disturb already-paired clients", async () => {
+  await withRegistry(async ({ clients, manage }) => {
+    const existing = clients.create("existing");
+    await manage({ action: "issue_code" });
+    assert.equal(clients.matches(existing.clientKey), true);
+    assert.equal(clients.count(), 1);
+  });
+});
+
+test("list reflects a code issued through the tool", async () => {
+  await withRegistry(async ({ manage }) => {
+    await manage({ action: "issue_code" });
+    const body = parse(await manage({ action: "list" }));
+    assert.equal(body.pairing.pending, true);
+    assert.ok(body.pairing.expiresAt);
   });
 });

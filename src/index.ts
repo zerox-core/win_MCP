@@ -320,6 +320,8 @@ function createMcpServer(): McpServer {
   registerClientAdminTool(server, {
     clients: clientRegistry,
     pairingStatus: () => pairingRegistry.status(),
+    issueCode: () => pairingRegistry.issue(),
+    publicBaseUrl,
   });
   registerDevelopmentTaskTools(server, developmentTaskCoordinator);
   registerDevelopmentEnvironmentTools(server, developmentEnvironment);

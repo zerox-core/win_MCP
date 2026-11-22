@@ -243,7 +243,7 @@ MCP，`Authorization` 应使用**固定值**，其参数值为 `Bearer <your-own
 | 分组 | 工具 |
 |---|---|
 | 连通与授权 | `ping`、`auth`、`list_allowed_directories` |
-| 客户端管理 | `manage_clients`（owner 专用：列出已配对客户端，按 id 或 label 单独吊销） |
+| 客户端管理 | `manage_clients`（owner 专用：签发配对码、列出已配对客户端、按 id 或 label 单独吊销） |
 | 文件与目录 | `read_file`、`write_file`、`edit_file`、`create_directory`、`list_directory`、`move_file`、`search_files`、`search_content`、`get_file_info`、`compare_files`、`apply_patch` |
 | 命令与 Git | `execute_command`、`git_status`、`git_diff` |
 | 结构化 Git | `git_workflow`（固定 Git 工作流 action） |
@@ -267,10 +267,12 @@ MCP，`Authorization` 应使用**固定值**，其参数值为 `Bearer <your-own
 
 | action | 作用 |
 |---|---|
+| `issue_code` | 签发新配对码，旧码立即失效。**不用重启服务**，返回可直接复制的 `curl` 命令 |
 | `list` | 列出已配对客户端（id、label、创建/最后使用时间）和配对码状态 |
 | `revoke` | 按 `id` 或 `label` 吊销一个客户端，其他客户端不受影响 |
 | `revoke_all` | 吊销全部客户端（所有客户端都要重新配对，慎用） |
 
+给新设备配对时用 `issue_code`：说一句「发个新配对码」即可，已配好的客户端不受影响。
 吊销立即生效：该客户端的密钥马上失效，无需重启。
 
 ## 构建与测试命令
