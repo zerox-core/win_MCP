@@ -1,0 +1,298 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+
+const projectDir = path.resolve(import.meta.dirname, "..");
+const powershell = "powershell.exe";
+const launcherScript = path.join(projectDir, "scripts", "start-winmcp.ps1");
+
+async function fixture(overrides = {}) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "feishu-launcher-"));
+  const envFile = path.join(root, ".env");
+  const values = {
+    PORT: "3000",
+    HOST: "127.0.0.1",
+    ALLOWED_DIRS: "",
+    OWNER_USER_ID: "launcher-owner-identity",
+    OWNER_DEFAULT_DIRS: path.join(root, "owner-default-directory"),
+    DIRECTORY_APPROVAL_FALLBACK: "owner",
+    MCP_AUTH_TOKEN: "transport-secret-value",
+    AUTH_MODE: "pin",
+    AUTH_PIN: "pin-secret-value",
+    APPROVAL_STATE_SECRET: "approval-secret-value",
+    APPROVAL_DATA_DIR: path.join(root, "approval-data"),
+    MAX_CONCURRENT_TOOLS: "6",
+    MAX_CONCURRENT_COMMANDS: "2",
+    MAX_CONCURRENT_SEARCHES: "3",
+    MAX_CONCURRENT_FETCHES: "4",
+    PUBLIC_HOST: "mcp.example.com",
+    ...overrides,
+  };
+  await writeFile(
+    envFile,
+    Object.entries(values)
+      .map(([key, value]) => `${key}=${value}`)
+      .join("\n"),
+    "utf8"
+  );
+  return { root, envFile };
+}
+
+function checkOnly(envFile) {
+  return spawnSync(
+    powershell,
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      launcherScript,
+      "-CheckOnly",
+      "-EnvFile",
+      envFile,
+    ],
+    {
+      cwd: projectDir,
+      env: {
+        ...process.env,
+        PUBLIC_HOST: "",
+        NGROK_DOMAIN: "",
+        AUTH_PIN: "",
+        MCP_AUTH_TOKEN: "",
+      },
+      encoding: "utf8",
+    }
+  );
+}
+
+test(
+  "launcher check mode resolves safe configuration without leaking secrets",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const item = await fixture();
+    try {
+      const result = checkOnly(item.envFile);
+      assert.equal(result.status, 0, result.stderr);
+      assert.doesNotMatch(
+        result.stdout + result.stderr,
+        /transport-secret-value|pin-secret-value|approval-secret-value/
+      );
+      const output = JSON.parse(result.stdout);
+      assert.ok(
+        ["missing", "incompatible", "ready"].includes(output.brokerState),
+        `unexpected broker state: ${output.brokerState}`
+      );
+      assert.deepEqual(
+        {
+          status: output.status,
+          port: output.port,
+          host: output.host,
+          authMode: output.authMode,
+          publicHost: output.publicHost,
+          toolCount: output.toolCount,
+          concurrency: output.concurrency,
+          permanentApprovalCount: output.permanentApprovalCount,
+          ownerDefaultCount: output.ownerDefaultCount,
+          permanentDirectoryGrantCount: output.permanentDirectoryGrantCount,
+          directoryApprovalFallback: output.directoryApprovalFallback,
+        },
+        {
+          status: "ready",
+          port: 3000,
+          host: "127.0.0.1",
+          authMode: "pin",
+          publicHost: "mcp.example.com",
+          toolCount: 42,
+          concurrency: { search: 3, fetch: 4, global: 6, command: 2 },
+          permanentApprovalCount: 0,
+          ownerDefaultCount: 1,
+          permanentDirectoryGrantCount: 0,
+          directoryApprovalFallback: "owner",
+        }
+      );
+      assert.equal((result.stdout + result.stderr).includes("launcher-owner-identity"), false);
+      assert.equal((result.stdout + result.stderr).includes(path.join(item.root, "owner-default-directory")), false);
+    } finally {
+      await rm(item.root, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  "launcher requires an owner identity when owner defaults are configured",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const item = await fixture({ OWNER_USER_ID: "" });
+    try {
+      const result = checkOnly(item.envFile);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /OWNER_USER_ID.*required/i);
+    } finally {
+      await rm(item.root, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  "launcher requires either static or owner default directories",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const item = await fixture({ ALLOWED_DIRS: "", OWNER_DEFAULT_DIRS: "" });
+    try {
+      const result = checkOnly(item.envFile);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /ALLOWED_DIRS or OWNER_DEFAULT_DIRS/i);
+    } finally {
+      await rm(item.root, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  "launcher accepts the legacy ngrok domain when PUBLIC_HOST is absent",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const item = await fixture({ PUBLIC_HOST: "", NGROK_DOMAIN: "legacy.ngrok-free.app" });
+    try {
+      const result = checkOnly(item.envFile);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(JSON.parse(result.stdout).publicHost, "legacy.ngrok-free.app");
+      assert.doesNotMatch(
+        result.stdout + result.stderr,
+        /transport-secret-value|pin-secret-value|approval-secret-value/
+      );
+    } finally {
+      await rm(item.root, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  "launcher rejects a missing public host and legacy domain without leaking secrets",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const item = await fixture({ PUBLIC_HOST: "", NGROK_DOMAIN: "" });
+    try {
+      const result = checkOnly(item.envFile);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /PUBLIC_HOST or NGROK_DOMAIN/);
+      assert.doesNotMatch(
+        result.stdout + result.stderr,
+        /transport-secret-value|pin-secret-value|approval-secret-value/
+      );
+    } finally {
+      await rm(item.root, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  "launcher rejects a PUBLIC_HOST containing non-hostname characters",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const item = await fixture({ PUBLIC_HOST: "https://mcp.example.com/path" });
+    try {
+      const result = checkOnly(item.envFile);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /PUBLIC_HOST must contain only a hostname/i);
+    } finally {
+      await rm(item.root, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  "launcher rejects out-of-range concurrency limits without leaking secrets",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const item = await fixture({ MAX_CONCURRENT_TOOLS: "65" });
+    try {
+      const result = checkOnly(item.envFile);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /MAX_CONCURRENT_TOOLS.*1 and 64/i);
+      assert.doesNotMatch(
+        result.stdout + result.stderr,
+        /transport-secret-value|pin-secret-value|approval-secret-value/
+      );
+    } finally {
+      await rm(item.root, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  "BAT entrypoint delegates to the PowerShell orchestrator",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const content = await readFile(
+      path.join(projectDir, "start-winmcp.bat"),
+      "utf8"
+    );
+    assert.match(content, /scripts\\start-winmcp\.ps1/i);
+    assert.match(content, /ExecutionPolicy\s+Bypass/i);
+    assert.doesNotMatch(content, /MCP_AUTH_TOKEN|AUTH_PIN|ngrok|cloudflared/i);
+  }
+);
+
+test("launcher is local-service-only and decoupled from any tunnel process", async () => {
+  const content = await readFile(launcherScript, "utf8");
+  // PUBLIC_HOST is preferred, with NGROK_DOMAIN retained for migration safety.
+  assert.match(content, /GetEnvironmentVariable\("PUBLIC_HOST", "Process"\)/);
+  assert.match(content, /GetEnvironmentVariable\("NGROK_DOMAIN", "Process"\)/);
+  assert.match(content, /PUBLIC_HOST or NGROK_DOMAIN is required/);
+  assert.match(content, /PUBLIC_HOST must contain only a hostname/);
+  // No coupled tunnel ownership remains.
+  assert.doesNotMatch(content, /Resolve-Ngrok|Wait-NgrokTunnel/);
+  assert.doesNotMatch(content, /ngrok\.exe|NGROK_AUTHTOKEN/);
+  assert.doesNotMatch(content, /127\.0\.0\.1:4040|--url=https:\/\/\$domain|--domain=\$domain/);
+  // Public connector health is delegated to the Cloudflare test script.
+  assert.match(content, /test-cloudflare-tunnel\.ps1/);
+});
+
+test("cf launcher owns and supervises the production tunnel", async () => {
+  const content = await readFile(
+    path.join(projectDir, "scripts", "start-cf-mcp.ps1"),
+    "utf8",
+  );
+  assert.match(content, /Get-ProductionConnector/);
+  assert.match(content, /Test-ConnectorHealth/);
+  assert.match(content, /Test-PublicHealth/);
+  assert.match(content, /Stop-OwnedProcessTree/);
+  assert.match(content, /"run", \$TunnelName/);
+  assert.doesNotMatch(content, /New-Service|sc\.exe\s+create|cloudflared\s+service\s+install/i);
+  assert.doesNotMatch(content, /tunnel-supervisor\.ps1/i);
+});
+
+test("cf stop entrypoint delegates to the supervisor", async () => {
+  const content = await readFile(
+    path.join(projectDir, "scripts", "stop-cf-mcp.ps1"),
+    "utf8",
+  );
+  assert.match(content, /tunnel-supervisor\.ps1/i);
+  assert.match(content, /-Action Stop/);
+  assert.doesNotMatch(content, /Stop-Process\s+-Name\s+cloudflared/i);
+});
+
+test("launcher performs a read-only broker state check and reports 42 tools", async () => {
+  const content = await readFile(launcherScript, "utf8");
+  // Broker check is read-only — never installs, starts, stops, or elevates.
+  const brokerFn = content.match(/function\s+Get-BrokerState[\s\S]*?\r?\n\}\r?\n/);
+  assert.ok(brokerFn, "Get-BrokerState function must exist");
+  const body = brokerFn[0];
+  assert.match(body, /Get-Service.*WinMcpAdminBroker/i);
+  assert.match(body, /SHA256\]::Create\(\)/i);
+  assert.match(body, /winmcp-admin-\$suffix/i);
+  assert.doesNotMatch(body, /winmcp-admin-broker/i);
+  assert.doesNotMatch(body, /Start-Service|Stop-Service|Install|Start-Process/i);
+  // CheckOnly output reports the exact 42-tool inventory and broker state.
+  assert.match(content, /toolCount\s*=\s*42/);
+  assert.match(content, /brokerState\s*=\s*Get-BrokerState/);
+  // The broker key path may be read for readiness, but is never added to output.
+  const checkOutput = content.match(/if\s*\(\$CheckOnly\)[\s\S]*?ConvertTo-Json\s+-Compress/i);
+  assert.ok(checkOutput, "CheckOnly output block must exist");
+  assert.doesNotMatch(checkOutput[0], /keyPath|brokerKey|DEV_ENV_BROKER/i);
+  assert.match(checkOutput[0], /publicHost\s*=\s*\$publicHost/);
+});

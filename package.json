@@ -1,0 +1,28 @@
+{
+  "name": "win-mcp",
+  "version": "1.0.0",
+  "description": "Expose local filesystem to Feishu Aily AI assistant via MCP Streamable HTTP — secure, authenticated, and ngrok-ready",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test --test-concurrency=4 test/*.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/express": "^2.0.0-beta.5",
+    "@modelcontextprotocol/server": "^2.0.0-beta.5",
+    "diff": "^5.2.2",
+    "express": "^4.21.2",
+    "zod": "^4.2.0"
+  },
+  "devDependencies": {
+    "@types/diff": "^5.2.3",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

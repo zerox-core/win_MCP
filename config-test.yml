@@ -1,0 +1,17 @@
+# win-mcp 测试隧道配置样例（方案 B：独立隧道，与生产 config.yml 完全分离）
+# 生产隧道配置位于 %USERPROFILE%\.cloudflared\config.yml，本文件不共享任何内容。
+#
+# ⚠️ 启用前两步（用户侧操作）:
+#   1. cloudflared tunnel create winmcp-test
+#      → 输出 Tunnel UUID，并生成 %USERPROFILE%\.cloudflared\<UUID>.json 凭证
+#   2. 把下面的 tunnel 与 credentials-file 两处全部替换成该 UUID 与本机真实路径
+#   3. cloudflared tunnel route dns winmcp-test mcp-test.example.com
+#
+# 注意：填入真实 UUID 后请勿提交本文件，或改为指向 .env.test 中的值。
+tunnel: <TUNNEL_UUID>
+credentials-file: C:\Users\<USERNAME>\.cloudflared\<TUNNEL_UUID>.json
+metrics: 127.0.0.1:20242
+ingress:
+  - hostname: mcp-test.example.com
+    service: http://127.0.0.1:3100
+  - service: http_status:404

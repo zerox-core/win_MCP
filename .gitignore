@@ -1,0 +1,37 @@
+node_modules/
+tools/ngrok/
+dist/
+.env
+.env.*
+!.env.example
+!.env.test.example
+logs/
+*.pid
+approval.key
+approvals.json
+directory-grants.json
+/tasks/
+/.development-data/
+*.task.json
+*.heartbeat
+*.cancel-request
+*.log
+.DS_Store
+coverage/
+.vscode/
+.idea/
+
+
+# Administrator broker build artifacts (source & tests are tracked)
+broker/**/bin/
+broker/**/obj/
+artifacts/admin-broker/
+*.broker-key
+broker-registration.local.json
+*.pfx
+*.p12
+*.keystore
+key.properties
+
+# Local workspace catalog (operator-owned, never tracked)
+local-workspaces.json
