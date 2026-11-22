@@ -2,7 +2,7 @@ name: Windows Development CI
 
 on:
   push:
-    branches: [codex/android-windows-development-environment]
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -31,6 +31,10 @@ jobs:
 
       - name: Node tests
         run: npm test
+        env:
+          # config.ts refuses to start under AUTH_MODE=pin without a PIN.
+          AUTH_MODE: pin
+          AUTH_PIN: ci-fixture-pin-0123456789
 
       - name: Broker tests
         run: dotnet test broker/WinMcp.AdminBroker.Tests/WinMcp.AdminBroker.Tests.csproj
