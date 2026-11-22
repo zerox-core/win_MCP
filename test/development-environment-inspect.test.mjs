@@ -9,7 +9,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -24,8 +24,12 @@ const { TrustedExecutableResolver } =
 const { EnvironmentInspector, publicComponentStatus } =
   await import("../dist/development/environment/inspect.js");
 
-const root = await mkdtemp(path.join(tmpdir(), "feishu-inspect-"));
-const tmp = await mkdtemp(path.join(tmpdir(), "feishu-inspect-cat-"));
+// Canonical temp root: `tmpdir()` can be an 8.3 short path on Windows
+// (C:\Users\RUNNER~1\...) while the resolver canonicalizes candidate paths,
+// so an allowed root must be spelled canonically for containment to hold.
+const tempBase = await realpath(tmpdir());
+const root = await mkdtemp(path.join(tempBase, "feishu-inspect-"));
+const tmp = await mkdtemp(path.join(tempBase, "feishu-inspect-cat-"));
 test.after(async () => {
   await rm(root, { recursive: true, force: true });
   await rm(tmp, { recursive: true, force: true });

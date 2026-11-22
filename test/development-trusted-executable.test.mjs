@@ -9,7 +9,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -54,7 +54,10 @@ test("resolves a trusted candidate and reports ready state", async () => {
   assert.equal(result.publisher, "Microsoft Corporation");
   assert.equal(result.version, "8.0.1");
   assert.match(result.fileIdentity, /^[0-9a-f]{64}$/);
-  assert.equal(result.realPath, path.resolve(file));
+  // The resolver reports the canonical path. Build the expectation from a
+  // canonical base too: `tmpdir()` can be an 8.3 short path on Windows
+  // (C:\Users\RUNNER~1\...) while realpath yields the long form.
+  assert.equal(result.realPath, await realpath(file));
 });
 
 test("cache invalidates after the fixture is replaced", async () => {

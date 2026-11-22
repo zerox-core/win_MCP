@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-const root = await mkdtemp(path.join(os.tmpdir(), "feishu-local-workflow-tool-"));
+// Canonical temp root: `tmpdir()` can be an 8.3 short path on Windows while
+// the helpers below compare against canonical paths.
+const root = await mkdtemp(path.join(await realpath(os.tmpdir()), "feishu-local-workflow-tool-"));
 const { validateTestFiles, relativeTestPaths, TestFileError } = await import("../dist/development/web/testFiles.js");
 const { buildWorkflowLaunchSpec, buildWorkflowSteps } = await import("../dist/development/web/commands.js");
 test.after(() => rm(root, { recursive: true, force: true }));

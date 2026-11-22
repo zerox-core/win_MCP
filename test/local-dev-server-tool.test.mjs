@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-const root = await mkdtemp(path.join(os.tmpdir(), "feishu-local-server-tool-"));
+// Use the canonical temp root. On Windows `tmpdir()` can be an 8.3 short path
+// (C:\Users\RUNNER~1\...) while the catalog loader canonicalizes workspace
+// roots, which would make a valid catalog look like an artifact escape.
+const root = await mkdtemp(path.join(await realpath(os.tmpdir()), "feishu-local-server-tool-"));
 const workspace = path.join(root, "workspace");
 const approval = path.join(root, "approval-data");
 await mkdir(workspace, { recursive: true });

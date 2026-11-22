@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile, realpath } from "node:fs/promises";
 import { writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -37,7 +37,10 @@ test("loads a trusted catalog and exposes no roots", async () => {
   const workspace = await mkdtemp(path.join(root, "workspace-"));
   const { catalog: loaded, digest } = await load(catalog(workspace));
   assert.match(digest, /^[a-f0-9]{64}$/);
-  assert.equal(loaded.workspaces[0].artifactDirs[0], path.join(workspace, "dist"));
+  // The loader canonicalizes artifact paths. Build the expectation from the
+  // canonical workspace too: `tmpdir()` can be an 8.3 short path on Windows
+  // (C:\Users\RUNNER~1\...) while realpath yields the long form.
+  assert.equal(loaded.workspaces[0].artifactDirs[0], path.join(await realpath(workspace), "dist"));
   const publicView = publicCatalog(loaded);
   assert.equal(publicView.workspaces[0].root, undefined);
   assert.equal(publicView.workspaces[0].recipes[0].steps.length, 4);
