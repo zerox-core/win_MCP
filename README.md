@@ -19,6 +19,16 @@
 
 ## 10 分钟个人接入
 
+> **先选客户端**：本服务支持三种调用方式，服务端完全相同，只是客户端不同。
+>
+> | 方式 | 适合谁 | 要不要写代码 |
+> |---|---|---|
+> | 飞书 Aily | 日常在飞书里对话 | 不用 |
+> | 桌面 MCP 客户端（Claude Desktop / Cline / Cursor） | 想用现成客户端操作本机 | 不用 |
+> | 纯 API 桥接（DeepSeek / OpenAI / 本地 Ollama…） | 只有 API key，没有 MCP 客户端 | 不用（仓库自带） |
+>
+> 三条路的完整配置教程见 **[docs/connection-guide.md](docs/connection-guide.md)**。
+
 ### 1. 克隆并安装
 
 ```powershell
