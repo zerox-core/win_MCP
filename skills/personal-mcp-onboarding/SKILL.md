@@ -109,6 +109,33 @@ name or description field is only explanatory text and does not send the authori
 For a personal MCP restricted to its owner, tell the user to configure `Authorization` as a fixed
 request header value so Aily can discover the server tools during registration.
 
+### 豆包（桌面客户端 / 手机 App 智能体连接器）
+
+在豆包的「新建自定义连接器」或移动端「添加 MCP」中，按以下表单填入：
+
+```text
+服务器名称:     win_mcp
+传输类型:       HTTP
+服务器 URL:     https://<你的公网域名>/mcp
+自定义 Headers:
+  Authorization: Bearer <你的clientKey>
+  x-aily-user:   <你的OWNER_USER_ID，默认owner>
+```
+
+> **注意网络模式差异**：
+> 1. 如果是**纯对话/云端大模型/手机版豆包**：必须填写公网域名（如 Cloudflare Tunnel 域名），因为云端 LLM 必须经由公网回访你的电脑。
+> 2. 如果是**同一台电脑上的桌面端本地连接器**：可直接填写 `http://127.0.0.1:3000/mcp`。
+
+### 针对云端大模型用户的“一键复制粘贴引导提示词”
+如果用户使用的是普通云端对话大模型，且不知道如何开启连接或测试，提供一段直接复制发给 AI 的引导话术：
+```text
+【系统提示：本地环境已启动 win_MCP 工具服务】
+你现在可以使用连接器中配置的本地 Windows 工具能力。
+1. 请先调用 ping 工具确认与服务端的通信连通。
+2. 随后向我汇报当前已连接的工具列表。
+3. 当我提出操作文件、执行命令或查看项目时，请直接调用对应的工具函数执行并向我汇报结果。
+```
+
 ### Desktop MCP client (Claude Desktop, Cline, Cursor, Continue)
 
 No code is needed. Give this JSON shape and tell them to put it where their client expects it:
