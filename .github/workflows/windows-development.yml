@@ -30,25 +30,29 @@ jobs:
         run: npm run build
 
       - name: Node tests
-        run: npm test
-        env:
-          # config.ts refuses to start under AUTH_MODE=pin without a PIN.
-          AUTH_MODE: pin
-          AUTH_PIN: ci-fixture-pin-0123456789
+        shell: pwsh
+        run: |
+          # config.ts refuses to start under AUTH_MODE=pin without a PIN. Generate
+          # it here rather than committing a literal: the secret scan reports any
+          # committed value it finds, so a literal PIN in this file would be
+          # flagged as a leak on every run.
+          $env:AUTH_MODE = "pin"
+          $env:AUTH_PIN = -join ((1..24) | ForEach-Object { '{0:x}' -f (Get-Random -Min 0 -Max 16) })
+          npm test
 
       - name: Broker tests
         run: dotnet test broker/WinMcp.AdminBroker.Tests/WinMcp.AdminBroker.Tests.csproj
 
       - name: Python smoke tests
+        shell: pwsh
         run: |
           # test/e2e_test.py drives the server over HTTP and needs the httpx client.
           python -m pip install --disable-pip-version-check --quiet httpx
+          # Same reason as above: the harness boots the server itself, so it needs
+          # a PIN, and it must not be a committed literal.
+          $env:AUTH_MODE = "pin"
+          $env:AUTH_PIN = -join ((1..24) | ForEach-Object { '{0:x}' -f (Get-Random -Min 0 -Max 16) })
           python test/e2e_test.py
-        env:
-          # config.ts refuses to start under AUTH_MODE=pin without a PIN, and the
-          # e2e harness boots the server itself.
-          AUTH_MODE: pin
-          AUTH_PIN: ci-fixture-pin-0123456789
 
       - name: Production audit
         run: npm audit --omit=dev --registry=https://registry.npmjs.org
@@ -56,9 +60,12 @@ jobs:
       - name: Secret scan
         shell: pwsh
         run: |
-          # Generate throwaway fixture secrets, then scan the tree for any leak.
+          # Scan with freshly generated throwaway secrets instead of literal
+          # fixtures. A literal would have to be committed for the scan to know
+          # it, and committed in this very file — so the scan would then always
+          # match its own input and report a "leak" that cannot be fixed.
           $env:AUTH_MODE = "none"
-          $env:APPROVAL_STATE_SECRET = "ci-fixture-secret-0123456789abcdef0123456789abcdef"
+          $env:APPROVAL_STATE_SECRET = -join ((1..64) | ForEach-Object { '{0:x}' -f (Get-Random -Min 0 -Max 16) })
           $env:OWNER_USER_ID = "ci-owner"
           powershell -NoProfile -ExecutionPolicy Bypass -File scripts/scan-development-secrets.ps1
 
