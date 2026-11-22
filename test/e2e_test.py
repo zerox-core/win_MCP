@@ -16,6 +16,14 @@ import shutil
 import tempfile
 import httpx
 
+# Tool output legitimately contains non-ASCII characters (for example the arrow
+# in "Successfully moved A -> B"). On a Windows console whose code page is
+# cp1252, printing them raises UnicodeEncodeError and aborts the run even when
+# every assertion passed. Report with replacement instead of crashing.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(errors="replace")
+    sys.stderr.reconfigure(errors="replace")
+
 SERVER_PORT = 3013
 BASE_URL = f"http://127.0.0.1:{SERVER_PORT}"
 MCP_URL = f"{BASE_URL}/mcp"
