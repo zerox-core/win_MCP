@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import fs from "node:fs";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -9,7 +10,7 @@ process.env.APPROVAL_STATE_SECRET = "client-pairing-test-secret-0123456789";
 process.env.OWNER_USER_ID = "owner";
 process.env.LOG_LEVEL = "error";
 
-const { ClientKeyStore, PairingCodeRegistry, formatPairCode } = await import(
+const { ClientRegistry, PairingCodeRegistry, formatPairCode } = await import(
   "../dist/security/clientPairing.js"
 );
 const { isValidPublicHost, guidePublicHost } = await import(
@@ -17,69 +18,185 @@ const { isValidPublicHost, guidePublicHost } = await import(
 );
 
 // ---------------------------------------------------------------------------
-// Client key
+// Client registry (per-client, revocable)
 // ---------------------------------------------------------------------------
 
-test("client key is created once and reused across stores", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "client-key-"));
+test("registry mints a distinct client per pairing", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "client-registry-"));
   try {
-    const first = new ClientKeyStore(dir).ensure();
-    assert.equal(first.created, true);
-    assert.equal(first.clientKey.length, 64);
-
-    // A second store over the same directory (a restart) must reuse the key.
-    const second = new ClientKeyStore(dir).ensure();
-    assert.equal(second.created, false);
-    assert.equal(second.clientKey, first.clientKey);
+    const registry = new ClientRegistry(dir);
+    const first = registry.create("laptop");
+    const second = registry.create("phone");
+    assert.notEqual(first.clientKey, second.clientKey);
+    assert.notEqual(first.client.id, second.client.id);
+    assert.equal(registry.count(), 2);
+    assert.deepEqual(
+      registry.list().map((client) => client.label),
+      ["laptop", "phone"],
+    );
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("client key file is owner-only", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "client-key-mode-"));
+test("only hashes are persisted, never the key itself", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "client-registry-hash-"));
   try {
-    const store = new ClientKeyStore(dir);
-    store.ensure();
-    // Windows does not report POSIX modes; only assert where they are meaningful.
-    if (process.platform !== "win32") {
-      const info = await stat(store.filePath);
-      assert.equal(info.mode & 0o077, 0, "key file must not be group/world readable");
-    }
-    const raw = await readFile(store.filePath, "utf8");
-    assert.equal(JSON.parse(raw).version, 1);
+    const registry = new ClientRegistry(dir);
+    const { clientKey } = registry.create("hashed");
+    const raw = fs.readFileSync(registry.filePath, "utf8");
+    assert.equal(raw.includes(clientKey), false, "plaintext key must not be stored");
+    const parsed = JSON.parse(raw);
+    assert.equal(parsed.version, 2);
+    assert.equal(parsed.clients[0].keyHash.length, 64);
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("client key matching is exact", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "client-key-match-"));
+test("a client key survives a new registry instance (restart)", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "client-registry-restart-"));
   try {
-    const store = new ClientKeyStore(dir);
-    const { clientKey } = store.ensure();
-    assert.equal(store.matches(clientKey), true);
-    assert.equal(store.matches(clientKey.slice(0, -1)), false);
-    assert.equal(store.matches(`${clientKey}x`), false);
-    assert.equal(store.matches(""), false);
-    assert.equal(store.matches(undefined), false);
+    const first = new ClientRegistry(dir);
+    const created = first.create("persisted");
+    const reopened = new ClientRegistry(dir);
+    assert.equal(reopened.matches(created.clientKey), true);
+    assert.equal(reopened.count(), 1);
+    assert.equal(reopened.list()[0].label, "persisted");
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("corrupt key file is not treated as a valid key", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "client-key-corrupt-"));
+test("revoking one client leaves the others working", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "client-registry-revoke-"));
   try {
-    const store = new ClientKeyStore(dir);
-    await writeFile(store.filePath, "{ not json", "utf8");
-    assert.equal(store.read(), undefined);
-    assert.equal(store.matches("anything"), false);
-    // ensure() must recover by minting a usable key rather than staying broken.
-    const recovered = store.ensure();
-    assert.equal(recovered.clientKey.length, 64);
+    const registry = new ClientRegistry(dir);
+    const laptop = registry.create("laptop");
+    const phone = registry.create("phone");
+
+    const revoked = registry.revoke("laptop");
+    assert.equal(revoked?.label, "laptop");
+
+    assert.equal(registry.matches(laptop.clientKey), false, "revoked key must stop working");
+    assert.equal(registry.matches(phone.clientKey), true, "other client must keep working");
+    assert.equal(registry.count(), 1);
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("revocation works by id as well as label", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "client-registry-id-"));
+  try {
+    const registry = new ClientRegistry(dir);
+    const created = registry.create("by-id");
+    assert.equal(registry.revoke(created.client.id)?.id, created.client.id);
+    assert.equal(registry.matches(created.clientKey), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("revoking an unknown client reports nothing revoked", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "client-registry-missing-"));
+  try {
+    const registry = new ClientRegistry(dir);
+    registry.create("only");
+    assert.equal(registry.revoke("nope"), undefined);
+    assert.equal(registry.count(), 1);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("revocation persists across a restart", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "client-registry-revoke-persist-"));
+  try {
+    const registry = new ClientRegistry(dir);
+    const created = registry.create("gone");
+    registry.revoke("gone");
+    const reopened = new ClientRegistry(dir);
+    assert.equal(reopened.matches(created.clientKey), false);
+    assert.equal(reopened.count(), 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("unknown and malformed keys never match", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "client-registry-reject-"));
+  try {
+    const registry = new ClientRegistry(dir);
+    registry.create("real");
+    assert.equal(registry.matches(""), false);
+    assert.equal(registry.matches(undefined), false);
+    assert.equal(registry.matches("f".repeat(64)), false);
+    assert.equal(registry.matches("short"), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("lastUsedAt is recorded but throttled", () => {
+  let now = 1_700_000_000_000;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "client-registry-touch-"));
+  try {
+    const registry = new ClientRegistry(dir, {
+      now: () => now,
+      lastUsedThrottleMs: 1_000,
+    });
+    const created = registry.create("touched");
+    assert.equal(created.client.lastUsedAt, undefined);
+
+    assert.equal(registry.matches(created.clientKey), true);
+    const firstUse = registry.list()[0].lastUsedAt;
+    assert.ok(firstUse, "first use must be recorded");
+
+    // Within the throttle window the timestamp must not move.
+    now += 500;
+    registry.matches(created.clientKey);
+    assert.equal(registry.list()[0].lastUsedAt, firstUse);
+
+    // Past the window it advances.
+    now += 600;
+    registry.matches(created.clientKey);
+    assert.notEqual(registry.list()[0].lastUsedAt, firstUse);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a corrupt registry file fails closed", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "client-registry-corrupt-"));
+  try {
+    const registry = new ClientRegistry(dir);
+    const created = registry.create("before-corruption");
+    fs.writeFileSync(registry.filePath, "{ not json", "utf8");
+
+    const reopened = new ClientRegistry(dir);
+    assert.equal(reopened.count(), 0);
+    assert.equal(reopened.matches(created.clientKey), false, "corrupt store must not authorize");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("revokeAll clears every client and persists", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "client-registry-all-"));
+  try {
+    const registry = new ClientRegistry(dir);
+    const a = registry.create("a");
+    const b = registry.create("b");
+    assert.equal(registry.revokeAll(), 2);
+    assert.equal(registry.count(), 0);
+    assert.equal(registry.matches(a.clientKey), false);
+    assert.equal(registry.matches(b.clientKey), false);
+
+    const reopened = new ClientRegistry(dir);
+    assert.equal(reopened.count(), 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import fs from "node:fs";
+import { pairCodeFromOutput, redeemPairCode } from "../support/clientKey.mjs";
 
 const projectDir = path.resolve(import.meta.dirname, "..", "..");
 
@@ -110,25 +110,22 @@ export async function startMcpFixture({
     throw new Error(`server did not become ready: ${output.join("")}`);
   }
 
-  // `/health` is liveness-only unless authenticated, so expose the per-install
-  // client key the server minted on startup. Tests needing the full diagnostics
-  // body must send it as a Bearer token.
+  // Clients are per-pairing and only their digests are persisted, so pair once
+  // here to obtain a working credential for tests that need /health or the
+  // client-management endpoints.
   let clientKey;
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    try {
-      const parsed = JSON.parse(
-        await readFile(path.join(approvalDataDir, "client-key.json"), "utf8"),
-      );
-      if (typeof parsed.clientKey === "string" && parsed.clientKey.length >= 32) {
-        clientKey = parsed.clientKey;
-        break;
-      }
-    } catch {}
+    const code = pairCodeFromOutput(output);
+    if (code) {
+      const paired = await redeemPairCode(baseUrl, code, "test-fixture");
+      clientKey = paired.clientKey;
+      break;
+    }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   if (!clientKey) {
     await stopChild(child);
-    throw new Error(`client key never appeared under ${approvalDataDir}`);
+    throw new Error(`pairing code never appeared: ${output.join("")}`);
   }
   const authHeaders = { authorization: `Bearer ${clientKey}` };
 

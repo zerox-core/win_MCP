@@ -61,6 +61,7 @@ OWNER_COMMAND_POLICY=approval
 |---|---|---|
 | 形态 | 64 位十六进制 | 8 位，如 `K7M3-PX9Q` |
 | 寿命 | **永久**，重启/升级不变 | 10 分钟，**只用一次** |
+| 粒度 | 每个客户端一个，可单独吊销 | 一次重启一个可用码 |
 
 首次 `npm start` 时，控制台会打印配对码：
 
@@ -70,18 +71,34 @@ OWNER_COMMAND_POLICY=approval
    POST http://127.0.0.1:3000/pair   {"code":"K7M3-PX9Q"}
 ```
 
-用它换永久密钥：
+用它换密钥：
 
 ```powershell
 Invoke-RestMethod -Uri http://127.0.0.1:3000/pair -Method Post `
-  -ContentType 'application/json' -Body '{"code":"K7M3-PX9Q"}'
+  -ContentType 'application/json' -Body '{"code":"K7M3-PX9Q","label":"laptop"}'
 ```
 
 返回的 `clientKey` 填进客户端（飞书里是 MCP 的 Bearer Token 字段）。
 **这个值永久有效，客户端以后不用再改。** 重启只会换配对码，不会换密钥。
 
-想换密钥（例如泄露）：删掉 `APPROVAL_DATA_DIR\client-key.json` 再重启，
-所有客户端需重新配对一次——**这是唯一会打断使用的操作**。
+**每个客户端单独一个密钥**，所以可以一个一个管理：
+
+```powershell
+# 查看已配对的客户端
+Invoke-RestMethod -Uri http://127.0.0.1:3000/clients `
+  -Headers @{ Authorization = "Bearer <clientKey>" }
+
+# 单独吊销某个（其他客户端不受影响）
+Invoke-RestMethod -Uri http://127.0.0.1:3000/clients/revoke -Method Post `
+  -ContentType 'application/json' -Headers @{ Authorization = "Bearer <clientKey>" } `
+  -Body '{"label":"laptop"}'
+```
+
+注册表 `clients.json` **只存密钥的 SHA-256 摘要，不存明文**，
+即使文件泄露也无法当凭据用。
+
+不想用了就吊销那一个，不用打扰其他客户端。彻底重来则删除
+`APPROVAL_DATA_DIR\clients.json` 后重启。
 
 ### 4. 启动本地 MCP 与公网连接器
 

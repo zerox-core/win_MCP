@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { pairClient } from "./support/clientKey.mjs";
 
 const projectDir = path.resolve(import.meta.dirname, "..");
 
@@ -153,10 +154,10 @@ test("PIN authentication is isolated per request identity", async () => {
       `unauthenticated /health leaked fields: ${JSON.stringify(health)}`,
     );
     assert.equal(health.status, "ok");
-    // The paired client key unlocks the full diagnostics view.
-    const clientKey = JSON.parse(
-      await readFile(path.join(workspace, "approvals", "client-key.json"), "utf8"),
-    ).clientKey;
+    // Clients are per-pairing and only digests are persisted, so pair one to
+    // get a credential that unlocks the full diagnostics view.
+    const paired = await pairClient(baseUrl, output, "security-auth-test");
+    const clientKey = paired.clientKey;
     const fullHealth = await (
       await fetch(`${baseUrl}/health`, {
         headers: { authorization: `Bearer ${clientKey}` },

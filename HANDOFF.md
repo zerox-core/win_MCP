@@ -70,8 +70,8 @@ node dist/index.js
 
 首次启动会做三件事：
 
-1. 生成**永久客户端密钥**（`APPROVAL_DATA_DIR\client-key.json`，0600 权限）
-2. 在控制台打印**一次性配对码**，形如 `K7M3-PX9Q`（10 分钟有效）
+1. 在控制台打印**一次性配对码**，形如 `K7M3-PX9Q`（10 分钟有效）
+2. 配对成功后为该客户端生成密钥，密钥**永久有效**、跨重启不变
 3. 如果没配 `PUBLIC_HOST`，会**交互式问你**（本地调试直接回车跳过）
 
 ```
@@ -84,10 +84,10 @@ node dist/index.js
  Enter this code once in your MCP client to bind it.
    POST http://127.0.0.1:3000/pair   {"code":"K7M3-PX9Q"}
 
- The client receives a permanent key and never needs this
- code again. Restarting issues a new code; existing keys
- keep working.
- Client key created: C:\Users\<你>\AppData\Local\win-mcp\client-key.json
+ Each redemption creates a separate client that can be
+ revoked on its own. Restarting issues a new code; already
+ paired clients keep working.
+ Paired clients: 2 (manage with GET /clients)
 ============================================================
 ```
 
@@ -114,10 +114,12 @@ curl -H "Authorization: Bearer <你的clientKey>" http://127.0.0.1:3000/health
 | 形态 | 64 位十六进制 | 8 位、形如 `K7M3-PX9Q` |
 | 寿命 | **永久**，重启/升级都不变 | 10 分钟，**只用一次** |
 | 用途 | 每次请求带在 `Authorization: Bearer` | 仅用于把手输换成自动下发 |
-| 存放 | `client-key.json`（0600，不进仓库） | 只在内存，重启即失效 |
+| 存放 | `clients.json` 里只有 **SHA-256 摘要** | 只在内存，重启即失效 |
+| 粒度 | **每个客户端一个**，可单独吊销 | 一次重启一个可用码 |
 
 **关键点：客户端只配一次。** 你输一次配对码，客户端拿到永久密钥存起来，
-以后不再需要配对码。
+以后不再需要配对码。每次配对产生**独立客户端**，因此可以按客户端单独吊销
+（见 3.3）。
 
 ### 3.2 配对流程（第一次配置时做一次）
 
@@ -147,15 +149,68 @@ curl -X POST http://127.0.0.1:3000/pair `
 把 `clientKey` 填进客户端（飞书里就是 MCP 的 Bearer Token 字段）。
 **这个值是永久的**，客户端以后不用再动。
 
-### 3.3 配错了怎么办
+### 3.3 多客户端与单独吊销
+
+**每次配对生成一个独立客户端**，不是共享一个密钥。所以你可以：
+
+- 手机、笔记本、CI 脚本各配一个，互不影响
+- 单独吊销其中一个，其他照常工作
+
+配对时可以带 `label` 方便识别：
+
+```powershell
+Invoke-RestMethod -Uri http://127.0.0.1:3000/pair -Method Post `
+  -ContentType 'application/json' -Body '{"code":"K7M3-PX9Q","label":"laptop"}'
+```
+
+查看已配对客户端（需要任一有效密钥）：
+
+```powershell
+curl -H "Authorization: Bearer <clientKey>" http://127.0.0.1:3000/clients
+```
+
+```json
+{
+  "ok": true,
+  "clients": [
+    { "id": "a8bcc850-...", "label": "laptop", "createdAt": "...", "lastUsedAt": "..." },
+    { "id": "7be223cd-...", "label": "phone",  "createdAt": "..." }
+  ]
+}
+```
+
+单独吊销（按 label 或 id）：
+
+```powershell
+curl -X POST http://127.0.0.1:3000/clients/revoke `
+  -H "Authorization: Bearer <clientKey>" `
+  -H "Content-Type: application/json" `
+  -d '{"label":"laptop"}'
+```
+
+全部吊销（慎用，所有客户端都要重新配对）：
+
+```powershell
+curl -X POST http://127.0.0.1:3000/clients/revoke `
+  -H "Authorization: Bearer <clientKey>" `
+  -H "Content-Type: application/json" `
+  -d '{"all":true}'
+```
+
+**安全设计**：注册表只存密钥的 SHA-256 摘要（`clients.json`），
+**不存明文**。所以即使这个文件泄露，也无法拿来当凭据用。
+
+### 3.4 配错了怎么办
 
 - **配对码过期/输错太多次** → 重启服务，会打印新的配对码。
-  已经配好的客户端**不受影响**，永久密钥仍然有效。
-- **想给新客户端再配一个** → 重启服务拿新码，或者任何一次重启都会产生新码。
-- **密钥泄露想换** → 删除 `APPROVAL_DATA_DIR\client-key.json` 后重启，
-  所有客户端需要重新配对一次。**这是唯一会打断使用场景的操作。**
+  已经配好的客户端**不受影响**，它们的密钥仍然有效。
+- **想给新客户端再配一个** → 重启服务拿新码（一次重启 = 一个可用码）。
+- **某个客户端不用了** → 用 `/clients/revoke` 单独吊销它，其他不受影响。
+- **怀疑某个密钥泄露** → 吊销那一个即可，不用打断其他客户端。
+- **彻底重来** → 删除 `APPROVAL_DATA_DIR\clients.json` 后重启，
+  所有客户端需重新配对。
 
-### 3.4 公网域名（内网穿透）
+### 3.5 公网域名（内网穿透）
 
 `PUBLIC_HOST` 决定服务端接受哪些 Host/Origin，**不配的话外部客户端连不上**
 （本地 `localhost` 仍然可用，因为内置在白名单里）。
@@ -394,8 +449,8 @@ overrides 就能解决，不值得为此引入大版本风险。
 8. **把剩余的裸 `renameSync` 也收敛**。`textTransfers/`、`artifacts/`、
    `android/projectProvider.ts` 等处仍有 staging→rename；其中会覆盖已存在
    文件的场景应改用 `renameWithRetry`（纯目录 rename 不涉及文件共享冲突，可不动）。
-9. **配对密钥的撤销界面**。目前只能删 `client-key.json` 来吊销全部客户端；
-   如果需要按客户端单独吊销，得给 client key 加 id 和一张已配对列表。
+9. ~~配对密钥的撤销界面~~ **已完成**（第 3.3 节）。每次配对生成独立客户端，
+   可 `GET /clients` 列出、`POST /clients/revoke` 单独吊销。
 
 ---
 
@@ -487,7 +542,7 @@ powershell -File scripts/build-admin-broker.ps1
 - `.env`、`.env.test`（`.gitignore` 已覆盖，但请勿用 `git add -f`）
 - `C:\Users\<你>\.cloudflared\*.json`（隧道凭证）
 - `logs/`、`approval.key`、`approvals.json`、`directory-grants.json`
-- **`client-key.json`**（客户端永久密钥，在 `APPROVAL_DATA_DIR` 下，0600）
+- **`clients.json`**（已配对客户端注册表，只含密钥摘要，在 `APPROVAL_DATA_DIR` 下，0600）
 - 任何真实域名、隧道 UUID、Token、PIN、个人路径
 
 **如果你需要引用自己的隧道**，写进本地 `.env`：

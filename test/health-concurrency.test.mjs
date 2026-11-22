@@ -5,7 +5,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { bearer, waitForClientKey } from "./support/clientKey.mjs";
+import { bearer, pairClient } from "./support/clientKey.mjs";
 
 const projectDir = path.resolve(import.meta.dirname, "..");
 
@@ -60,14 +60,20 @@ test("health exposes redacted approval and concurrency summaries", async () => {
       BINARY_ARTIFACT_MAX_UPLOADS: "6",
       NGROK_DOMAIN: "",
     },
-    stdio: "ignore",
+    // Capture output: the pairing code is printed there.
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  const output = [];
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => output.push(chunk));
+  child.stderr.on("data", (chunk) => output.push(chunk));
   try {
     const url = `http://127.0.0.1:${port}/health`;
     // The full diagnostics body requires a credential; unauthenticated /health
-    // is liveness-only by design.
-    const approvalDataDir = path.join(root, "approvals");
-    const auth = bearer(await waitForClientKey(approvalDataDir));
+    // is liveness-only by design. Clients are per-pairing, so pair one first.
+    const paired = await pairClient(`http://127.0.0.1:${port}`, output, "health-test");
+    const auth = bearer(paired.clientKey);
     let health;
     for (let attempt = 0; attempt < 100; attempt += 1) {
       try {

@@ -57,7 +57,7 @@ import {
   toolAuthorizationMiddleware,
 } from "./security/toolAccess.js";
 import { approvalStore } from "./security/approvalStore.js";
-import { ClientKeyStore, PairingCodeRegistry, formatPairCode } from "./security/clientPairing.js";
+import { ClientRegistry, PairingCodeRegistry } from "./security/clientPairing.js";
 import { registerPairingRoutes } from "./security/pairingRoutes.js";
 import { guidePublicHost, isInteractive } from "./security/publicHostGuide.js";
 import { approvalStateCodec } from "./security/approvalState.js";
@@ -368,10 +368,9 @@ const handler = createMcpHandler(createMcpServer);
 // The client key is generated once per install and never rotates, so an
 // operator configures a client exactly once. The one-time code exists only so
 // that key never has to be typed or copied by hand.
-const clientKeyStore = new ClientKeyStore(APPROVAL_DATA_DIR);
+const clientRegistry = new ClientRegistry(APPROVAL_DATA_DIR);
 const pairingRegistry = new PairingCodeRegistry();
-const { clientKey: CLIENT_KEY, created: CLIENT_KEY_CREATED } = clientKeyStore.ensure();
-setClientKeyVerifier((candidate) => clientKeyStore.matches(candidate));
+setClientKeyVerifier((candidate) => clientRegistry.matches(candidate));
 
 const mcpProtocol = process.env.MCP_PROTOCOL?.trim() || "http";
 const portIsHttps = process.env.MCP_PROTOCOL?.trim() === "https";
@@ -379,7 +378,6 @@ const defaultPublicBase = PUBLIC_HOST
   ? `${portIsHttps ? "https" : "http"}://${PUBLIC_HOST}`
   : `${mcpProtocol}://127.0.0.1:${PORT}`;
 const publicBaseUrl = (): string => defaultPublicBase;
-void CLIENT_KEY;
 
 // ---------------------------------------------------------------------------
 // Express app
@@ -402,7 +400,7 @@ const app: Express = createMcpExpressApp({
 app.all(MCP_ENDPOINT, corsPreflight);
 
 // Pairing endpoints must be reachable before a client holds any credential.
-registerPairingRoutes({ app, registry: pairingRegistry, keyStore: clientKeyStore, publicBaseUrl });
+registerPairingRoutes({ app, registry: pairingRegistry, clients: clientRegistry, publicBaseUrl });
 
 // --- Auth + rate-limit middleware (Phase 3) ------------------------------
 // Applied only to the MCP endpoint; /health remains open for monitoring.
@@ -521,7 +519,7 @@ app.get("/health", (req: Request, res: Response) => {
     tools: TOOL_NAMES,
     auth: authSummary(),
     clientPairing: {
-      persistentKeyConfigured: Boolean(clientKeyStore.read()),
+      pairedClients: clientRegistry.count(),
       ...pairingRegistry.status(),
     },
     approval: {
@@ -633,9 +631,10 @@ function announceStartup(): void {
   if (AUTH_MODE === "pin") lines.push("PIN: configured via AUTH_PIN (value hidden)");
   process.stderr.write(`${lines.join("\n")}\n`);
 
-  // Pairing banner. The code is short-lived and single use; the client key it
-  // exchanges for is what actually persists.
+  // Pairing banner. The code is short-lived and single use; each redemption
+  // mints a separate revocable client.
   const issued = pairingRegistry.issue();
+  const pairedNow = clientRegistry.count();
   process.stdout.write(
     [
       "",
@@ -648,12 +647,12 @@ function announceStartup(): void {
       " Enter this code once in your MCP client to bind it.",
       `   POST http://127.0.0.1:${PORT}/pair   {"code":"${issued.display}"}`,
       "",
-      " The client receives a permanent key and never needs this",
-      " code again. Restarting issues a new code; existing keys",
-      " keep working.",
-      CLIENT_KEY_CREATED
-        ? ` Client key created: ${clientKeyStore.filePath}`
-        : " Client key already present (reused, not rotated).",
+      " Each redemption creates a separate client that can be",
+      " revoked on its own. Restarting issues a new code; already",
+      " paired clients keep working.",
+      pairedNow === 1
+        ? " Paired clients: 1"
+        : ` Paired clients: ${pairedNow} (manage with GET /clients)`,
       "============================================================",
       "",
     ].join("\n"),
