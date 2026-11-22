@@ -1,7 +1,9 @@
 # win_mcp：个人本地开发工作台 MCP
 
+> **新接手？先读 [HANDOFF.md](HANDOFF.md)** — 含五分钟上手、代码地图、安全模型与下一步任务。
+>
 > 部署前请先阅读 [SECURITY.md](SECURITY.md)。每台电脑必须使用自己的 `.env`、
-> `MCP_AUTH_TOKEN`、授权目录、ngrok 地址和 Aily MCP 配置。不要共享或提交这些信息。
+> `MCP_AUTH_TOKEN`、授权目录和隧道配置。不要共享或提交这些信息。
 
 这是一个运行在你自己电脑上的 MCP（Model Context Protocol）服务。它让飞书 Aily
 工作台在受控范围内访问本机项目：读写文件、查看 Git、运行构建与测试、检查 Android
