@@ -24,10 +24,12 @@
 > | 方式 | 适合谁 | 要不要写代码 |
 > |---|---|---|
 > | 飞书 Aily | 日常在飞书里对话 | 不用 |
-> | 桌面 MCP 客户端（Claude Desktop / Cline / Cursor） | 想用现成客户端操作本机 | 不用 |
-> | 纯 API 桥接（DeepSeek / OpenAI / 本地 Ollama…） | 只有 API key，没有 MCP 客户端 | 不用（仓库自带） |
+> | MCP 客户端（桌面：Claude Desktop / Cline / Cursor；**手机：豆包 App**） | 想用现成客户端操作本机 | 不用 |
+> | 纯 API 桥接（DeepSeek / OpenAI / 本地 Ollama…） | 只有 API key，客户端不支持 MCP | 不用（仓库自带） |
 >
-> 三条路的完整配置教程见 **[docs/connection-guide.md](docs/connection-guide.md)**。
+> 豆包 App 支持自定义 MCP 与审批弹窗，直接按远程客户端配置即可，
+> 不需要桥接程序。三条路（含豆包）的完整教程见
+> **[docs/connection-guide.md](docs/connection-guide.md)**。
 
 ### 1. 克隆并安装
 
