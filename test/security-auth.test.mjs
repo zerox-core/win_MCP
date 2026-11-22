@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import http from "node:http";
 import os from "node:os";
@@ -144,10 +144,27 @@ test("PIN authentication is isolated per request identity", async () => {
     }
     if (!ready) throw new Error(`server did not become ready: ${lastError}\n${output}`);
 
+    // Unauthenticated /health is liveness-only: it must not hand out the tool
+    // inventory or policy names to anyone who can reach the port.
     const health = await (await fetch(`${baseUrl}/health`)).json();
-assert.equal(health.toolCount, 42);
-    assert.equal(health.tools.length, 42);
-    assert.deepEqual(Object.keys(health.concurrency).sort(), ["artifact", "command", "fetch", "global", "search"]);
+    assert.deepEqual(
+      Object.keys(health).sort(),
+      ["service", "status", "timestamp", "version"],
+      `unauthenticated /health leaked fields: ${JSON.stringify(health)}`,
+    );
+    assert.equal(health.status, "ok");
+    // The paired client key unlocks the full diagnostics view.
+    const clientKey = JSON.parse(
+      await readFile(path.join(workspace, "approvals", "client-key.json"), "utf8"),
+    ).clientKey;
+    const fullHealth = await (
+      await fetch(`${baseUrl}/health`, {
+        headers: { authorization: `Bearer ${clientKey}` },
+      })
+    ).json();
+    assert.equal(fullHealth.toolCount, 42);
+    assert.equal(fullHealth.tools.length, 42);
+    assert.deepEqual(Object.keys(fullHealth.concurrency).sort(), ["artifact", "command", "fetch", "global", "search"]);
     const fixedHostHealth = await rawHealthRequest(port, {
       host: "fixed-test.ngrok-free.dev",
       origin: "https://fixed-test.ngrok-free.dev",

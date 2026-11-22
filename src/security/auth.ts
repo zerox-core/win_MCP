@@ -18,6 +18,17 @@ import {
 import { checkRateLimit } from "./rateLimit.js";
 import { logger } from "./logger.js";
 
+/**
+ * Optional verifier for the persistent per-install client key minted by the
+ * pairing flow. Injected rather than imported so the middleware stays testable
+ * and so `AUTH_MODE` continues to work without a pairing store.
+ */
+let clientKeyMatches: ((candidate: string) => boolean) | undefined;
+
+export function setClientKeyVerifier(verifier: (candidate: string) => boolean): void {
+  clientKeyMatches = verifier;
+}
+
 const CORS_HEADERS = [
   "Content-Type",
   "Authorization",
@@ -53,6 +64,19 @@ function tokenMatches(candidate: string, expected: string): boolean {
   );
 }
 
+/**
+ * True when the candidate is a valid transport credential.
+ *
+ * Two credentials are accepted: the operator-configured shared token
+ * (`MCP_AUTH_TOKEN`) and the persistent per-install client key issued through
+ * pairing. Both are compared in constant time.
+ */
+export function isAuthorizedToken(token: string | null | undefined): boolean {
+  if (!token) return false;
+  if (MCP_AUTH_TOKEN && tokenMatches(token, MCP_AUTH_TOKEN)) return true;
+  return clientKeyMatches ? clientKeyMatches(token) : false;
+}
+
 export function corsPreflight(
   req: Request,
   res: Response,
@@ -86,7 +110,7 @@ export function authMiddleware(
 
   // --- Auth check ---
   if (AUTH_ENABLED) {
-    if (!token || !tokenMatches(token, MCP_AUTH_TOKEN)) {
+    if (!isAuthorizedToken(token)) {
       logger.warn("transport_authentication_failed", { ip: req.ip });
       res.status(401).json({
         jsonrpc: "2.0",

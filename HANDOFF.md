@@ -54,23 +54,145 @@ Copy-Item .env.example .env
 
 | 变量 | 说明 |
 |---|---|
-| `MCP_AUTH_TOKEN` | 随机长字符串，`openssl rand -hex 32` 或等价方式生成 |
-| `AUTH_PIN` | 至少 8 位，`AUTH_MODE=pin` 时必填 |
+| `AUTH_PIN` | 至少 8 位，`AUTH_MODE=pin` 时必填。这跟客户端配对无关，是本地工具授权用的 |
 | `ALLOWED_DIRS` | 授权目录，**不要写成整个盘符**，写具体项目路径 |
 | `OWNER_USER_ID` | 你的用户标识，owner-only 工具依赖它 |
-| `PUBLIC_HOST` | 你的公网域名；纯本地调试可留空 |
+| `PUBLIC_HOST` | 你的公网域名。**留空也行**，启动时会问你要 |
+
+> `MCP_AUTH_TOKEN` **不再是必填**。首次启动会自动生成一个永久客户端密钥，
+> 详见第 3 节「客户端配对」。
 
 启动服务：
 
 ```powershell
 node dist/index.js
-# 健康检查
+```
+
+首次启动会做三件事：
+
+1. 生成**永久客户端密钥**（`APPROVAL_DATA_DIR\client-key.json`，0600 权限）
+2. 在控制台打印**一次性配对码**，形如 `K7M3-PX9Q`（10 分钟有效）
+3. 如果没配 `PUBLIC_HOST`，会**交互式问你**（本地调试直接回车跳过）
+
+```
+============================================================
+ Client pairing
+============================================================
+ One-time code:  K7M3-PX9Q
+ Expires:        2026-11-22T17:48:31.920Z
+
+ Enter this code once in your MCP client to bind it.
+   POST http://127.0.0.1:3000/pair   {"code":"K7M3-PX9Q"}
+
+ The client receives a permanent key and never needs this
+ code again. Restarting issues a new code; existing keys
+ keep working.
+ Client key created: C:\Users\<你>\AppData\Local\win-mcp\client-key.json
+============================================================
+```
+
+健康检查：
+
+```powershell
+# 不带密钥：只有存活状态（status/service/version/timestamp）
 curl http://127.0.0.1:3000/health
+# 带密钥：完整诊断（工具清单、策略、并发、任务等）
+curl -H "Authorization: Bearer <你的clientKey>" http://127.0.0.1:3000/health
 ```
 
 ---
 
-## 3. 代码地图
+## 3. 客户端配对与公网域名
+
+### 3.1 为什么这么设计
+
+外部 MCP 客户端（飞书 Aily 等）需要一个长期凭据。手输 64 位密钥不现实，
+所以拆成两层：
+
+| | 客户端密钥（client key） | 配对码（pair code） |
+|---|---|---|
+| 形态 | 64 位十六进制 | 8 位、形如 `K7M3-PX9Q` |
+| 寿命 | **永久**，重启/升级都不变 | 10 分钟，**只用一次** |
+| 用途 | 每次请求带在 `Authorization: Bearer` | 仅用于把手输换成自动下发 |
+| 存放 | `client-key.json`（0600，不进仓库） | 只在内存，重启即失效 |
+
+**关键点：客户端只配一次。** 你输一次配对码，客户端拿到永久密钥存起来，
+以后不再需要配对码。
+
+### 3.2 配对流程（第一次配置时做一次）
+
+```powershell
+# 1. 启动服务，从控制台抄下配对码
+node dist/index.js
+
+# 2. 用配对码换永久密钥（把 K7M3-PX9Q 换成你看到的）
+curl -X POST http://127.0.0.1:3000/pair `
+  -H "Content-Type: application/json" `
+  -d '{"code":"K7M3-PX9Q"}'
+```
+
+返回：
+
+```json
+{
+  "ok": true,
+  "clientKey": "7df77beb...(64位)",
+  "tokenType": "Bearer",
+  "usage": "Authorization: Bearer <clientKey>",
+  "mcpEndpoint": "https://mcp.example.com/mcp",
+  "note": "Store this key in the client. It does not change across restarts."
+}
+```
+
+把 `clientKey` 填进客户端（飞书里就是 MCP 的 Bearer Token 字段）。
+**这个值是永久的**，客户端以后不用再动。
+
+### 3.3 配错了怎么办
+
+- **配对码过期/输错太多次** → 重启服务，会打印新的配对码。
+  已经配好的客户端**不受影响**，永久密钥仍然有效。
+- **想给新客户端再配一个** → 重启服务拿新码，或者任何一次重启都会产生新码。
+- **密钥泄露想换** → 删除 `APPROVAL_DATA_DIR\client-key.json` 后重启，
+  所有客户端需要重新配对一次。**这是唯一会打断使用场景的操作。**
+
+### 3.4 公网域名（内网穿透）
+
+`PUBLIC_HOST` 决定服务端接受哪些 Host/Origin，**不配的话外部客户端连不上**
+（本地 `localhost` 仍然可用，因为内置在白名单里）。
+
+启动时如果检测到没配，会交互式问你：
+
+```
+--- Public hostname setup ---
+PUBLIC_HOST is not set, so only localhost clients are accepted.
+
+Two supported options:
+  Cloudflare Tunnel (recommended, free, stable hostname)
+    1. cloudflared tunnel create win-mcp
+    2. cloudflared tunnel route dns win-mcp mcp.example.com
+    3. cloudflared tunnel run --url http://127.0.0.1:3000 win-mcp
+    -> PUBLIC_HOST=mcp.example.com
+
+  ngrok (quick trial, hostname changes unless you pay)
+    1. ngrok http 3000 --domain your-name.ngrok-free.app
+    -> PUBLIC_HOST=your-name.ngrok-free.app
+
+Enter the bare hostname only (no scheme, no path, no trailing slash).
+PUBLIC_HOST (empty to skip):
+```
+
+填完会自动写回 `.env` 并提示重启生效。校验规则：**只接受裸主机名**，
+不能带 `http://`、路径、端口或尾部斜杠。
+
+> **建议用 Cloudflare Tunnel**：免费、主机名固定，不会像 ngrok 免费版那样
+> 每次重启换域名（域名一换，客户端的 endpoint 就得跟着改，这正是你想避免的）。
+
+**非交互环境**（CI、服务托管、`WINMCP_NONINTERACTIVE=1`）不会卡在提示上，
+只打印配置指引后继续启动。要禁用向导：设 `WINMCP_NONINTERACTIVE=1`。
+
+---
+
+## 4. 代码地图
 
 ```
 src/
@@ -84,6 +206,10 @@ src/
 │   ├── approval.ts       # 审批挑战签名与消费
 │   ├── pathGuard.ts      # 路径规范化、符号链接/联接点逃逸防护
 │   ├── networkGuard.ts   # SSRF 防护（元数据地址、内网段）
+│   ├── clientPairing.ts  # 永久客户端密钥 + 一次性配对码
+│   ├── pairingRoutes.ts  # POST /pair 与 /pair/status
+│   ├── publicHostGuide.ts # 启动时 PUBLIC_HOST 交互式引导
+│   ├── atomicReplace.ts  # Windows 安全的 rename 重试（EPERM/EBUSY）
 │   └── logger.ts         # 结构化日志 + 敏感值脱敏
 ├── tools/                # 35 个工具实现，每个对应一个 MCP tool
 ├── development/          # 开发任务子系统（任务队列、worker、工具链探测）
@@ -106,7 +232,7 @@ docs/                     # 面向使用者的文档
 
 ---
 
-## 4. 安全模型（改代码前必须理解）
+## 5. 安全模型（改代码前必须理解）
 
 这是整个项目的核心。四层防线：
 
@@ -136,7 +262,7 @@ docs/                     # 面向使用者的文档
 
 ---
 
-## 5. 当前状态
+## 6. 当前状态
 
 已完成并可用：
 
@@ -158,7 +284,7 @@ docs/                     # 面向使用者的文档
 
 ---
 
-## 6. 已知问题
+## 7. 已知问题
 
 **测试并发抖动（已修复，2026-11-22）**
 
@@ -253,25 +379,27 @@ overrides 就能解决，不值得为此引入大版本风险。
 
 ---
 
-## 7. 下一步建议（按价值排序）
+## 8. 下一步建议（按价值排序）
 
-1. ~~修掉测试并发抖动~~ **已完成**（第 6 节）。`npm test` 现在可以作为合并门槛。
-2. ~~清掉 `npm audit` 的 6 个漏洞~~ **已完成**（第 6 节）。CI 十三步全绿。
-3. **给 `/health` 加鉴权或裁剪字段**。当前它无鉴权返回工具清单、
-   `gitCommandPolicy`、`directoryApprovalFallback` 等。对外暴露过多侦查信息。
-   **这是目前最值得做的安全改进。**
+1. ~~修掉测试并发抖动~~ **已完成**（第 7 节）。`npm test` 现在可以作为合并门槛。
+2. ~~清掉 `npm audit` 的 6 个漏洞~~ **已完成**（第 7 节）。CI 十三步全绿。
+3. ~~给 `/health` 加鉴权或裁剪字段~~ **已完成**（第 3 节）。
+   不带密钥只返回 status/service/version/timestamp，带密钥才返回完整诊断。
 4. ~~补 CI~~ **已完成**：`.github/workflows/windows-development.yml`
    已监听 `main`，Node / Broker / Python 三个套件 + audit + secret scan 全部跑通。
-5. **配置样例的默认值收敛**。`.env.example` 里 `CONSENT_ABSOLUTE_PATH=confirm`
+5. ~~客户端配对与公网域名引导~~ **已完成**（第 3 节）。
+6. **配置样例的默认值收敛**。`.env.example` 里 `CONSENT_ABSOLUTE_PATH=confirm`
    是对的，但文档示例偶尔出现 `allow`，需要统一。
-6. **补充 CHANGELOG 与版本策略**。当前是 `1.0.0` 单点，没有发布流程。
-7. **把剩余的裸 `renameSync` 也收敛**。`textTransfers/`、`artifacts/`、
+7. **补充 CHANGELOG 与版本策略**。当前是 `1.0.0` 单点，没有发布流程。
+8. **把剩余的裸 `renameSync` 也收敛**。`textTransfers/`、`artifacts/`、
    `android/projectProvider.ts` 等处仍有 staging→rename；其中会覆盖已存在
    文件的场景应改用 `renameWithRetry`（纯目录 rename 不涉及文件共享冲突，可不动）。
+9. **配对密钥的撤销界面**。目前只能删 `client-key.json` 来吊销全部客户端；
+   如果需要按客户端单独吊销，得给 client key 加 id 和一张已配对列表。
 
 ---
 
-## 8. 开发约定
+## 9. 开发约定
 
 **提交前自检：**
 
@@ -303,7 +431,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/scan-development-sec
 
 ---
 
-## 9. 常用命令速查
+## 10. 常用命令速查
 
 ```powershell
 # 构建 / 类型检查
@@ -324,6 +452,17 @@ py test/e2e_test.py
 node dist/index.js
 powershell -File scripts/start-winmcp.ps1 -CheckOnly   # 只做预检
 
+# 客户端配对（首次配置客户端时做一次，见第 3 节）
+# 1) 从启动横幅抄下配对码，2) 换永久密钥：
+curl -X POST http://127.0.0.1:3000/pair -H "Content-Type: application/json" -d '{"code":"K7M3-PX9Q"}'
+
+# 健康检查：不带密钥只有存活状态，带密钥才是完整诊断
+curl http://127.0.0.1:3000/health
+curl -H "Authorization: Bearer <clientKey>" http://127.0.0.1:3000/health
+
+# 配对状态（不泄露码本身）
+curl http://127.0.0.1:3000/pair/status
+
 # 隧道
 powershell -File scripts/test-cloudflare-tunnel.ps1 -CheckOnly -ConfigPath <path>
 node scripts/prod-supervisor.mjs
@@ -341,13 +480,14 @@ powershell -File scripts/build-admin-broker.ps1
 
 ---
 
-## 10. 环境与凭据纪律
+## 11. 环境与凭据纪律
 
 **绝对不能提交的东西：**
 
 - `.env`、`.env.test`（`.gitignore` 已覆盖，但请勿用 `git add -f`）
 - `C:\Users\<你>\.cloudflared\*.json`（隧道凭证）
 - `logs/`、`approval.key`、`approvals.json`、`directory-grants.json`
+- **`client-key.json`**（客户端永久密钥，在 `APPROVAL_DATA_DIR` 下，0600）
 - 任何真实域名、隧道 UUID、Token、PIN、个人路径
 
 **如果你需要引用自己的隧道**，写进本地 `.env`：
@@ -361,16 +501,17 @@ CLOUDFLARE_CONFIG_PATH=%USERPROFILE%\.cloudflared\config.yml
 
 ---
 
-## 11. 交接检查清单
+## 12. 交接检查清单
 
 接手当天应该完成：
 
 - [ ] `npm install && npm run build` 成功
 - [ ] `npx tsc --noEmit` 零错误
-- [ ] 测试跑通，理解第 6 节的偶发失败
+- [ ] 测试跑通（`npm test`，969 个用例）
 - [ ] 能说清四层安全模型各挡什么
 - [ ] 说得出 `AUTH_MODE=none` 的风险
 - [ ] 知道改工具清单要同步哪三处
-- [ ] 本地 `node dist/index.js` 起得来，`/health` 有响应
+- [ ] 本地 `node dist/index.js` 起得来，控制台打印出配对码
+- [ ] 用配对码 `POST /pair` 拿到 clientKey，再用它访问 `/health` 看到全量
 
-完成后，从第 7 节第 1 项开始。
+完成后，从第 8 节第 6 项开始（前五项都已完成）。

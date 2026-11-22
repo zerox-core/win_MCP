@@ -36,9 +36,6 @@ npm install
 # 只授权自己的项目根目录；可用逗号分隔多个目录
 ALLOWED_DIRS=F:\MyProjects
 
-# 自己生成的长随机值；不要提交、截图或发送给他人
-MCP_AUTH_TOKEN=<your-own-random-token>
-
 # 个人部署的默认安全模式
 AUTH_MODE=pin
 AUTH_PIN=<your-own-strong-pin>
@@ -51,10 +48,42 @@ PUBLIC_HOST=mcp.example.com
 OWNER_COMMAND_POLICY=approval
 ```
 
-`AUTH_MODE=none` 仅适合完全由你自己控制的个人入口；即使使用它，也应保留
-`MCP_AUTH_TOKEN`。
+> `MCP_AUTH_TOKEN` 不是必填项。首次启动会自动生成一个**永久客户端密钥**并打印
+> **一次性配对码**，客户端用它绑定一次即可，详见下面的「客户端配对」。
 
-### 3. 启动本地 MCP 与公网连接器
+`AUTH_MODE=none` 仅适合完全由你自己控制的个人入口。
+
+### 3. 客户端配对（只做一次）
+
+外部客户端需要一个长期凭据，但手输 64 位密钥不现实，所以拆成两层：
+
+| | 客户端密钥 | 配对码 |
+|---|---|---|
+| 形态 | 64 位十六进制 | 8 位，如 `K7M3-PX9Q` |
+| 寿命 | **永久**，重启/升级不变 | 10 分钟，**只用一次** |
+
+首次 `npm start` 时，控制台会打印配对码：
+
+```
+ One-time code:  K7M3-PX9Q
+ Expires:        2026-11-22T17:48:31.920Z
+   POST http://127.0.0.1:3000/pair   {"code":"K7M3-PX9Q"}
+```
+
+用它换永久密钥：
+
+```powershell
+Invoke-RestMethod -Uri http://127.0.0.1:3000/pair -Method Post `
+  -ContentType 'application/json' -Body '{"code":"K7M3-PX9Q"}'
+```
+
+返回的 `clientKey` 填进客户端（飞书里是 MCP 的 Bearer Token 字段）。
+**这个值永久有效，客户端以后不用再改。** 重启只会换配对码，不会换密钥。
+
+想换密钥（例如泄露）：删掉 `APPROVAL_DATA_DIR\client-key.json` 再重启，
+所有客户端需重新配对一次——**这是唯一会打断使用的操作**。
+
+### 4. 启动本地 MCP 与公网连接器
 
 本地 MCP 与公网传输彼此解耦。Windows 推荐双击仓库根目录的：
 
@@ -81,7 +110,7 @@ Invoke-RestMethod http://127.0.0.1:3000/health
 正常时应返回 `status: ok`，并报告 42 个工具。若你使用 Clash Fake-IP，对公网
 `/health` 的回访失败只说明反向探测受限；本地服务和连接器仍可正常工作。
 
-### 4. 先选择公网传输
+### 5. 先选择公网传输
 
 在配置隧道前，先确定两件事：你使用 **Cloudflare** 还是 **ngrok**，以及是否拥有一个可
 专用于此 MCP 的独立域名。
@@ -96,7 +125,7 @@ Invoke-RestMethod http://127.0.0.1:3000/health
 工具路由产生歧义。切换时请遵循：先新建目标条目，验证 `ping` 与工具发现成功，最后再
 关闭旧条目。
 
-### 5. 公网传输（默认 Cloudflare 命名隧道，回滚备用 ngrok）
+### 6. 公网传输（默认 Cloudflare 命名隧道，回滚备用 ngrok）
 
 **主路径：Cloudflare 命名隧道 + 自有主机名。** 在 Cloudflare 控制台完成以下一次性配置
 （不要在仓库或截图里放凭据、tunnel UUID 或证书 JSON）：
@@ -150,7 +179,7 @@ Invoke-RestMethod http://127.0.0.1:3000/health
 完成测试后停止测试进程即可。合并或发布代码是另一项独立操作；生产仍保持 `.env` 和
 3000 端口，除非你明确启动正式服务。
 
-### 6. 在 Aily 添加 MCP
+### 7. 在 Aily 添加 MCP
 
 在 Aily 中添加企业自定义 MCP，Endpoint 类型选 **Streamable HTTP**。使用 Cloudflare
 时将 `<你的公网主机名>` 替换为 `PUBLIC_HOST`；使用 ngrok 时替换为自己的 ngrok 域名：
@@ -274,9 +303,20 @@ OWNER_COMMAND_POLICY=direct
 
 ### Aily 显示 401 或没有工具
 
-检查顺序：本地 `/health` 是否正常、ngrok 是否在线、Aily endpoint 是否为 `/mcp`、
-`Authorization` 是否为固定请求头且值为 `Bearer <your token>`。Aily 的描述栏不会
-代替真实请求头值。
+按这个顺序查：
+
+1. **客户端密钥配对了吗**。首次使用前必须用配对码换过密钥（第 3 节）。
+   没配对就直接调 `/mcp` 一定 401。
+2. **密钥对不对**。Aily 的 `Authorization` 必须是固定请求头，值形如
+   `Bearer <64位clientKey>`。Aily 的描述栏不会代替真实请求头值。
+3. **endpoint 是不是 `/mcp`**。
+4. **`PUBLIC_HOST` 配了吗**。没配的话服务端会拒绝非 localhost 的 Host/Origin，
+   外部访问表现为连不上或 403。
+5. 本地 `/health` 是否正常、隧道是否在线。
+
+排查技巧：不带密钥请求 `/health` 只会返回 `status/service/version/timestamp`
+四个字段（这是有意设计，防止扫描器探测）。带正确密钥才会返回工具清单等完整诊断——
+如果带密钥也只有四个字段，说明**密钥不对**，回第 1 步。
 
 ### Aily 的文字回答只列出一部分工具
 

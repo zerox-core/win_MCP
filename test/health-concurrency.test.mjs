@@ -5,6 +5,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { bearer, waitForClientKey } from "./support/clientKey.mjs";
 
 const projectDir = path.resolve(import.meta.dirname, "..");
 
@@ -63,17 +64,21 @@ test("health exposes redacted approval and concurrency summaries", async () => {
   });
   try {
     const url = `http://127.0.0.1:${port}/health`;
+    // The full diagnostics body requires a credential; unauthenticated /health
+    // is liveness-only by design.
+    const approvalDataDir = path.join(root, "approvals");
+    const auth = bearer(await waitForClientKey(approvalDataDir));
     let health;
     for (let attempt = 0; attempt < 100; attempt += 1) {
       try {
-        const response = await fetch(url);
+        const response = await fetch(url, { headers: auth });
         if (response.ok) { health = await response.json(); break; }
       } catch {}
       if (child.exitCode !== null) throw new Error(`server exited ${child.exitCode}`);
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     assert(health, "health endpoint did not become ready");
-assert.equal(health.toolCount, 42);
+    assert.equal(health.toolCount, 42);
     assert.equal(health.tools.length, 42);
     assert.deepEqual(
       Object.fromEntries(Object.entries(health.concurrency).map(([key, value]) => [key, value.limit])),

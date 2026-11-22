@@ -85,7 +85,7 @@ test("development tools E2E: 42-tool inventory and owner isolation", async () =>
     assert.equal(tmpl.ok, true, `${JSON.stringify(tmpl)}\n${fixture.output.join("")}`);
 
     // Health exposes aggregate data without secrets, paths, or task IDs.
-    const health = await (await fetch(`${fixture.baseUrl}/health`)).json();
+    const health = await (await fetch(`${fixture.baseUrl}/health`, { headers: fixture.authHeaders })).json();
     assert.equal(health.toolCount, 42);
     const serialized = JSON.stringify(health);
     assert.doesNotMatch(serialized, /planId|environmentDigest|catalogDigest|brokerKey|ownerSid|pipePath|realPath|fileIdentity/i);

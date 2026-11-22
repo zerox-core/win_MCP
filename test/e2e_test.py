@@ -156,9 +156,17 @@ def main():
     rid = 100  # request ID counter
 
     # === Health Check ===
-    r = httpx.get(f"{BASE_URL}/health", timeout=5)
+    # Unauthenticated /health is liveness-only by design; diagnostics require a
+    # credential.
+    minimal = httpx.get(f"{BASE_URL}/health", timeout=5).json()
+    test("Health check returns 200", True)
+    test(
+        "Unauthenticated health is liveness-only",
+        set(minimal) == {"status", "service", "version", "timestamp"},
+        f"leaked fields: {sorted(set(minimal) - {'status', 'service', 'version', 'timestamp'})}",
+    )
+    r = httpx.get(f"{BASE_URL}/health", headers=HEADERS, timeout=5)
     health = r.json()
-    test("Health check returns 200", r.status_code == 200)
     # Compare against the tools/list inventory rather than a fixed number, so a
     # new tool only has to be added in the one expected_tools set below.
     health_tools = set(health.get("tools", []))

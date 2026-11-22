@@ -46,7 +46,7 @@ import {
 } from "./config.js";
 import { registerAuthTool } from "./auth/authTool.js";
 import { summary as authSummary } from "./auth/pinAuth.js";
-import { authMiddleware, corsPreflight } from "./security/auth.js";
+import { authMiddleware, corsPreflight, extractToken, isAuthorizedToken, setClientKeyVerifier } from "./security/auth.js";
 import { logger } from "./security/logger.js";
 import {
   extractRequestContext,
@@ -57,6 +57,9 @@ import {
   toolAuthorizationMiddleware,
 } from "./security/toolAccess.js";
 import { approvalStore } from "./security/approvalStore.js";
+import { ClientKeyStore, PairingCodeRegistry, formatPairCode } from "./security/clientPairing.js";
+import { registerPairingRoutes } from "./security/pairingRoutes.js";
+import { guidePublicHost, isInteractive } from "./security/publicHostGuide.js";
 import { approvalStateCodec } from "./security/approvalState.js";
 import { cleanupTrash } from "./security/trash.js";
 import { directoryGrantStore } from "./security/directoryGrantStore.js";
@@ -360,6 +363,25 @@ registerStagingAndroidVerifyTool(server, {
 const handler = createMcpHandler(createMcpServer);
 
 // ---------------------------------------------------------------------------
+// Client pairing (persistent key + one-time codes)
+// ---------------------------------------------------------------------------
+// The client key is generated once per install and never rotates, so an
+// operator configures a client exactly once. The one-time code exists only so
+// that key never has to be typed or copied by hand.
+const clientKeyStore = new ClientKeyStore(APPROVAL_DATA_DIR);
+const pairingRegistry = new PairingCodeRegistry();
+const { clientKey: CLIENT_KEY, created: CLIENT_KEY_CREATED } = clientKeyStore.ensure();
+setClientKeyVerifier((candidate) => clientKeyStore.matches(candidate));
+
+const mcpProtocol = process.env.MCP_PROTOCOL?.trim() || "http";
+const portIsHttps = process.env.MCP_PROTOCOL?.trim() === "https";
+const defaultPublicBase = PUBLIC_HOST
+  ? `${portIsHttps ? "https" : "http"}://${PUBLIC_HOST}`
+  : `${mcpProtocol}://127.0.0.1:${PORT}`;
+const publicBaseUrl = (): string => defaultPublicBase;
+void CLIENT_KEY;
+
+// ---------------------------------------------------------------------------
 // Express app
 // ---------------------------------------------------------------------------
 
@@ -378,6 +400,9 @@ const app: Express = createMcpExpressApp({
 });
 
 app.all(MCP_ENDPOINT, corsPreflight);
+
+// Pairing endpoints must be reachable before a client holds any credential.
+registerPairingRoutes({ app, registry: pairingRegistry, keyStore: clientKeyStore, publicBaseUrl });
 
 // --- Auth + rate-limit middleware (Phase 3) ------------------------------
 // Applied only to the MCP endpoint; /health remains open for monitoring.
@@ -465,20 +490,40 @@ app.all(MCP_ENDPOINT, async (req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------------------------
-// Health check endpoint (non-MCP, always open)
+// Health check endpoint
 // ---------------------------------------------------------------------------
+// Unauthenticated callers get liveness only: an open port handed out with the
+// full tool inventory, auth mode, and policy names tells a scanner exactly what
+// this host can do. Callers presenting a valid Bearer credential get the full
+// diagnostics, so monitoring and troubleshooting both keep working.
 
-app.get("/health", (_req: Request, res: Response) => {
-  res.json({
+app.get("/health", (req: Request, res: Response) => {
+  const authorized = isAuthorizedToken(extractToken(req.headers.authorization));
+
+  const minimal = {
     status: "ok",
     service: SERVER_NAME,
     version: SERVER_VERSION,
+    timestamp: new Date().toISOString(),
+  };
+
+  if (!authorized) {
+    res.json(minimal);
+    return;
+  }
+
+  res.json({
+    ...minimal,
     mcpEndpoint: MCP_ENDPOINT,
     authEnabled: AUTH_ENABLED,
     authMode: AUTH_MODE,
     toolCount: TOOL_NAMES.length,
     tools: TOOL_NAMES,
     auth: authSummary(),
+    clientPairing: {
+      persistentKeyConfigured: Boolean(clientKeyStore.read()),
+      ...pairingRegistry.status(),
+    },
     approval: {
       mode: "feishu_input_required",
       choices: ["allow_once", "allow_session", "allow_permanent", "deny"],
@@ -502,7 +547,6 @@ app.get("/health", (_req: Request, res: Response) => {
       plans: developmentEnvironment.planStore.summary(),
     },
     binaryArtifacts: binaryArtifactStore.healthSummary(),
-    timestamp: new Date().toISOString(),
   });
 });
 
@@ -539,6 +583,38 @@ setInterval(purgeDevelopmentTasks, 60 * 60 * 1000); // 1 hour
 // ---------------------------------------------------------------------------
 
 app.listen(PORT, HOST, () => {
+  // Run the setup guide before announcing readiness: an operator who is
+  // configuring a tunnel needs to answer the prompt, and a server that prints
+  // "ready" first makes it easy to miss.
+  void runStartupGuidance().then(() => announceStartup());
+});
+
+/**
+ * Interactive first-run guidance.
+ *
+ * Deliberately runs after `listen` so the port is already accepting local
+ * requests, but before the banner, so the pairing code and any hostname prompt
+ * appear together. Non-interactive runs print instructions and move on.
+ */
+async function runStartupGuidance(): Promise<void> {
+  if (!isInteractive()) return;
+  try {
+    const result = await guidePublicHost({
+      currentHost: PUBLIC_HOST,
+      envPath: path.resolve(process.cwd(), ".env"),
+    });
+    if (result.persisted) {
+      process.stdout.write(
+        "\nPUBLIC_HOST saved. Restart the server to apply it to the host allowlist.\n",
+      );
+    }
+  } catch (error) {
+    // Guidance must never prevent the server from serving.
+    process.stderr.write(`public host guidance skipped: ${(error as Error).message}\n`);
+  }
+}
+
+function announceStartup(): void {
   const lines = [
     `${SERVER_NAME} v${SERVER_VERSION}`,
     `Server: http://${HOST}:${PORT}`,
@@ -556,4 +632,30 @@ app.listen(PORT, HOST, () => {
   ];
   if (AUTH_MODE === "pin") lines.push("PIN: configured via AUTH_PIN (value hidden)");
   process.stderr.write(`${lines.join("\n")}\n`);
-});
+
+  // Pairing banner. The code is short-lived and single use; the client key it
+  // exchanges for is what actually persists.
+  const issued = pairingRegistry.issue();
+  process.stdout.write(
+    [
+      "",
+      "============================================================",
+      " Client pairing",
+      "============================================================",
+      ` One-time code:  ${issued.display}`,
+      ` Expires:        ${issued.expiresAt}`,
+      "",
+      " Enter this code once in your MCP client to bind it.",
+      `   POST http://127.0.0.1:${PORT}/pair   {"code":"${issued.display}"}`,
+      "",
+      " The client receives a permanent key and never needs this",
+      " code again. Restarting issues a new code; existing keys",
+      " keep working.",
+      CLIENT_KEY_CREATED
+        ? ` Client key created: ${clientKeyStore.filePath}`
+        : " Client key already present (reused, not rotated).",
+      "============================================================",
+      "",
+    ].join("\n"),
+  );
+}
