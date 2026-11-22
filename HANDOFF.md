@@ -210,33 +210,58 @@ Windows 上 `rename` 覆盖一个正被其他句柄打开的文件会直接失�
 - e2e 里工具清单硬编码为 36，实际已是 42（7 个工具新增后没同步）。现改为单点
   维护的 `expected_tools` 集合，并新增一条 `/health` 与 `tools/list` 一致性断言。
 
-**仍然失败的一步：Production audit。**
-`npm audit --omit=dev` 报 6 个漏洞（1 critical / 4 high / 1 moderate）：
+**Production audit 的 6 个漏洞（已修复，2026-11-22）**
 
-| 包 | 严重度 | 说明 |
-|---|---|---|
-| `proxy-addr` ≤2.0.7 | critical | IPv4-mapped IPv6 信任子网导致 IP 伪造 |
-| `body-parser` <1.20.9 | high | 压缩请求体尾部字节 DoS |
-| `zod` <4.6.6 | high | 超大受约束集合校验时内存耗尽 |
-| `qs` ≤6.16.0 | moderate | 括号键逗号解析绕过数组上限 / DoS（3 条） |
+`npm audit --omit=dev` 曾报 6 个漏洞（1 critical / 4 high / 1 moderate）：
 
-`zod` 由 `@modelcontextprotocol/core` 传递依赖引入，因此升级可能牵动 MCP SDK。
-`npm audit fix` 声称都能修，但本机当时连不上 registry 未能验证。
-**这是独立的依赖升级任务，需要单独评估（尤其 zod 大版本与 MCP SDK 的兼容性），
-不要和别的改动混在一个 PR 里。**
+| 包 | 严重度 | 说明 | 修复后 |
+|---|---|---|---|
+| `proxy-addr` ≤2.0.7 | critical | IPv4-mapped IPv6 信任子网导致 IP 伪造 | 2.0.8 |
+| `body-parser` <1.20.9 | high | 压缩请求体尾部字节 DoS | 1.20.9 |
+| `zod` <4.6.6 | high | 超大受约束集合校验时内存耗尽 | 4.6.7 |
+| `qs` ≤6.16.0 | moderate | 括号键逗号解析绕过数组上限 / DoS（3 条） | 6.17.1 |
+
+**两类不同成因，别混为一谈：**
+
+- **zod / qs 靠升级就够**。zod 从 4.4.3 升到 4.6.7，本项目 `^4.2.0` 和
+  `@modelcontextprotocol/core@2.0.0-beta.5` 的 `dependencies.zod: ^4.2.0`
+  都允许——注意它是**普通 dependency 不是 peer**，所以不可能冲突（这一条曾被
+  交接文档误判为高风险）。qs 必须用 `overrides`：express 4.22.3 的 qs 范围是
+  `~6.16.0`，低于修复所需的 6.17.1，而 express 4.x 没有任何版本放宽它。
+- **body-parser / proxy-addr 是被 lockfile 钉死的**。express 的范围
+  （`~1.20.5` / `~2.0.7`）本来就允许修复版，只是 lock 里是旧的；所以光升 express
+  不解决问题（express 4.22.3 依然允许 1.20.6）。用 `overrides` 强制到
+  1.20.9 / 2.0.8，两者都落在原范围内。
+
+**刻意停留在 express 4**：express 5 是 HTTP 层的整体重写，而这个问题用
+overrides 就能解决，不值得为此引入大版本风险。
+
+验证（`npm ci` 干净装后）：
+- `npm audit --omit=dev --registry=https://registry.npmjs.org` → **0 漏洞**
+- `npx tsc --noEmit` → 0 错误
+- `npm test` → **953/953**
+- `py test/e2e_test.py` → **44/44**（这条真正走 express / body-parser /
+  proxy-addr 的请求链路，比单测更能证明没升级坏）
+
+**顺带修掉的 Secret scan 自指问题**：该步骤把 `APPROVAL_STATE_SECRET`
+以字面量写在自己这个 workflow 文件里，扫描时必然匹配到自己 → 永远报
+`file:.github/workflows/windows-development.yml`。任何已提交的值都无法同时满足
+「扫描器要知道它」和「仓库里不能有它」。现改为运行时随机生成，`AUTH_PIN`
+（Node 测试和 Python e2e 各一处）同样处理。
+
+**至此 CI 全绿（13 个步骤全部通过）**，`npm test` + `npm audit` 都可作为合并门槛。
 
 ---
 
 ## 7. 下一步建议（按价值排序）
 
 1. ~~修掉测试并发抖动~~ **已完成**（第 6 节）。`npm test` 现在可以作为合并门槛。
-2. **清掉 `npm audit` 的 6 个漏洞**（第 6 节末）。这是 CI 上唯一还红的一步，
-   也是当前唯一 known security debt。注意 `zod` 是 `@modelcontextprotocol/core`
-   的传递依赖，升级前先确认 SDK 兼容性。
+2. ~~清掉 `npm audit` 的 6 个漏洞~~ **已完成**（第 6 节）。CI 十三步全绿。
 3. **给 `/health` 加鉴权或裁剪字段**。当前它无鉴权返回工具清单、
    `gitCommandPolicy`、`directoryApprovalFallback` 等。对外暴露过多侦查信息。
+   **这是目前最值得做的安全改进。**
 4. ~~补 CI~~ **已完成**：`.github/workflows/windows-development.yml`
-   已监听 `main`，注入测试用 `AUTH_PIN`，Node / Broker / Python 三个套件都能跑通。
+   已监听 `main`，Node / Broker / Python 三个套件 + audit + secret scan 全部跑通。
 5. **配置样例的默认值收敛**。`.env.example` 里 `CONSENT_ABSOLUTE_PATH=confirm`
    是对的，但文档示例偶尔出现 `allow`，需要统一。
 6. **补充 CHANGELOG 与版本策略**。当前是 `1.0.0` 单点，没有发布流程。
