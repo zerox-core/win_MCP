@@ -151,7 +151,10 @@ def main():
     r = httpx.get(f"{BASE_URL}/health", timeout=5)
     health = r.json()
     test("Health check returns 200", r.status_code == 200)
-    test("Health shows 36 tools", len(health.get("tools", [])) == 36, f"got {len(health.get('tools', []))}")
+    # Compare against the tools/list inventory rather than a fixed number, so a
+    # new tool only has to be added in the one expected_tools set below.
+    health_tools = set(health.get("tools", []))
+    test("Health reports a tool inventory", len(health_tools) > 0, f"got {len(health_tools)}")
     test(
         "Health shows one owner default",
         health.get("directoryAuthorization", {}).get("ownerDefaults") == 1,
@@ -186,9 +189,12 @@ def main():
     tools = []
     if code == 200 and "result" in body:
         tools = [t["name"] for t in body["result"].get("tools", [])]
-    test("Tools list returns 36 tools", len(tools) == 36, f"got {len(tools)}")
-    expected_tools = {"ping", "read_file", "write_file", "edit_file", "create_directory", "list_directory", "move_file", "search_files", "get_file_info", "list_allowed_directories", "auth", "execute_command", "search_content", "git_status", "git_diff", "compare_files", "apply_patch", "web_fetch", "manage_binary_artifact", "todo_write", "todo_read", "ask_user", "get_development_task", "list_development_tasks", "read_development_task_logs", "cancel_development_task", "inspect_development_environment", "plan_environment_changes", "apply_environment_plan", "android_development", "windows_development", "node_development", "manage_development_project", "list_local_workspaces", "run_local_workflow"}
-    test("All expected tools present", set(tools) == expected_tools, f"missing: {expected_tools - set(tools)}")
+    expected_tools = {"ping", "read_file", "write_file", "edit_file", "create_directory", "list_directory", "move_file", "search_files", "get_file_info", "list_allowed_directories", "auth", "execute_command", "search_content", "git_status", "git_diff", "compare_files", "apply_patch", "web_fetch", "git_workflow", "java_development", "todo_write", "todo_read", "ask_user", "get_development_task", "list_development_tasks", "read_development_task_logs", "cancel_development_task", "inspect_development_environment", "plan_environment_changes", "apply_environment_plan", "android_development", "windows_development", "node_development", "python_development", "manage_development_project", "manage_binary_artifact", "manage_text_transfer", "list_local_workspaces", "run_local_workflow", "staging_android_verify", "workspace_context", "local_dev_server"}
+    # The inventory is a contract: `test/development-docs.test.mjs` asserts the
+    # same count, so derive it here instead of hardcoding a number that drifts.
+    test("Tools list returns the full inventory", len(tools) == len(expected_tools), f"got {len(tools)}, expected {len(expected_tools)}")
+    test("All expected tools present", set(tools) == expected_tools, f"missing: {sorted(expected_tools - set(tools))}; unexpected: {sorted(set(tools) - expected_tools)}")
+    test("Health and tools/list agree on the inventory", health_tools == set(tools), f"health only: {sorted(health_tools - set(tools))}; list only: {sorted(set(tools) - health_tools)}")
 
     # === Ping Tool ===
     rid += 1

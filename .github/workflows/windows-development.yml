@@ -40,7 +40,15 @@ jobs:
         run: dotnet test broker/WinMcp.AdminBroker.Tests/WinMcp.AdminBroker.Tests.csproj
 
       - name: Python smoke tests
-        run: python test/e2e_test.py
+        run: |
+          # test/e2e_test.py drives the server over HTTP and needs the httpx client.
+          python -m pip install --disable-pip-version-check --quiet httpx
+          python test/e2e_test.py
+        env:
+          # config.ts refuses to start under AUTH_MODE=pin without a PIN, and the
+          # e2e harness boots the server itself.
+          AUTH_MODE: pin
+          AUTH_PIN: ci-fixture-pin-0123456789
 
       - name: Production audit
         run: npm audit --omit=dev --registry=https://registry.npmjs.org
