@@ -1,0 +1,281 @@
+# win_MCP 交接说明（2026-11-22）
+
+> 接手这份文档，你就能在 15 分钟内拉起项目、跑通测试、知道下一步该做什么。
+
+---
+
+## 1. 项目是什么
+
+`win_MCP` 是一个**运行在你自己 Windows 电脑上的 MCP（Model Context Protocol）服务器**。
+它把本机能力以受控方式暴露给 AI 客户端（飞书 Aily 等），让 AI 能够：
+
+- 读写项目文件（限定在授权目录内）
+- 查看 Git 状态与差异
+- 执行构建、测试等命令（带审批与超时限制）
+- 探测并驱动 Android / Windows / Node / Python 工具链
+- 导入签名二进制制品
+
+关键设计前提：**这是一个高权限服务**。它能执行命令、能写文件。
+因此整个代码库的重心不在"功能多"，而在"边界是否真的挡得住"。
+
+- 仓库：<https://github.com/zerox-core/win_MCP>
+- 可见性：public
+- 主分支：`main`
+- 语言：TypeScript（Node 20+），另有 C# 管理员代理
+
+---
+
+## 2. 五分钟跑起来
+
+```powershell
+cd F:\win_MCP
+npm install
+npm run build
+npx tsc --noEmit          # 类型检查，应为 0 错误
+```
+
+跑测试（**必须设置 AUTH_PIN**，否则 config 会在启动时抛错）：
+
+```powershell
+$env:AUTH_MODE='pin'
+$env:AUTH_PIN='testpin12345'
+node --test --test-concurrency=4 test/*.test.mjs
+```
+
+预期：945 个用例，940+ 通过。详见第 6 节"已知问题"。
+
+本地启动前，先复制配置：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+然后**必须**编辑 `.env` 至少填这几项：
+
+| 变量 | 说明 |
+|---|---|
+| `MCP_AUTH_TOKEN` | 随机长字符串，`openssl rand -hex 32` 或等价方式生成 |
+| `AUTH_PIN` | 至少 8 位，`AUTH_MODE=pin` 时必填 |
+| `ALLOWED_DIRS` | 授权目录，**不要写成整个盘符**，写具体项目路径 |
+| `OWNER_USER_ID` | 你的用户标识，owner-only 工具依赖它 |
+| `PUBLIC_HOST` | 你的公网域名；纯本地调试可留空 |
+
+启动服务：
+
+```powershell
+node dist/index.js
+# 健康检查
+curl http://127.0.0.1:3000/health
+```
+
+---
+
+## 3. 代码地图
+
+```
+src/
+├── index.ts              # 组合根：Express app、路由、工具注册（改这里要格外小心）
+├── config.ts             # 全部环境变量解析与校验（启动即校验，失败直接抛错）
+├── auth/pinAuth.ts       # PIN 会话状态机（activeUsers、驱逐策略）
+├── security/
+│   ├── auth.ts           # Bearer 中间件 + 限流
+│   ├── toolAccess.ts     # 工具授权闸门 + owner 判定 + 路径审批
+│   ├── directoryGrantStore.ts  # once/session/permanent 三档目录授权
+│   ├── approval.ts       # 审批挑战签名与消费
+│   ├── pathGuard.ts      # 路径规范化、符号链接/联接点逃逸防护
+│   ├── networkGuard.ts   # SSRF 防护（元数据地址、内网段）
+│   └── logger.ts         # 结构化日志 + 敏感值脱敏
+├── tools/                # 35 个工具实现，每个对应一个 MCP tool
+├── development/          # 开发任务子系统（任务队列、worker、工具链探测）
+│   ├── tasks/            # 任务协调器、worker 协议、心跳
+│   ├── android/          # ADB、Gradle、签名
+│   ├── windows/          # MSBuild、Electron、原生项目
+│   └── servers/          # 本地开发服务器管理
+├── android-workflow/     # Android 暂存验证状态机（Profile 注册表）
+├── artifacts/            # 二进制制品：摘要、签名、物化
+└── textTransfers/        # 大文本分块传输
+
+broker/                   # C# 管理员代理（named pipe，隔离提权操作）
+test/                     # 131 个测试文件，与 src 结构大致对应
+scripts/                  # 启动、隧道、守护、凭据管理脚本
+docs/                     # 面向使用者的文档
+```
+
+**读代码建议顺序**：`config.ts` → `security/auth.ts` → `security/toolAccess.ts` →
+`tools/` 里挑一个（建议 `read_file` 或 `execute_command`）→ `index.ts`。
+
+---
+
+## 4. 安全模型（改代码前必须理解）
+
+这是整个项目的核心。四层防线：
+
+**第一层 — 传输鉴权（`security/auth.ts`）**
+`MCP_AUTH_TOKEN` 非空即启用 Bearer 校验，用 `timingSafeEqual` 比较。
+`AUTH_MODE` 决定工具级身份：`pin`（需 PIN 会话）/ `header`（信任请求头）/ `none`（全部放行）。
+
+> ⚠️ `AUTH_MODE=none` 会让 `isAuthenticated()` 恒为 `true`，owner 隔离随之失效。
+> 生产环境不要用它。
+
+**第二层 — 工具授权（`security/toolAccess.ts`）**
+`authorizeToolCall` 校验身份；`authorizeOwnerToolCall` 额外要求
+`getRequestUserId() === OWNER_USER_ID`。开发类工具走 owner 闸门。
+
+**第三层 — 目录边界（`security/pathGuard.ts` + `directoryGrantStore.ts`）**
+所有路径先规范化再比对授权根，防 `..`、符号链接、Windows 联接点逃逸。
+三档授权：`allow_once`（单次、绑定参数摘要）、`session`、`permanent`。
+挑战是签名的，含 user / tool / args digest / roots / nonce / 过期时间。
+
+**第四层 — 命令审批（`tools/command.ts` + `commandPolicy.ts`）**
+命令分类为 safe / confirmation_required / blocked。
+`GIT_COMMAND_POLICY`、`OWNER_COMMAND_POLICY`、`COMMAND_PREAPPROVED_EXE` 控制豁免范围。
+即便豁免，目录限制、超时、输出上限、取消能力仍然生效。
+
+**改动这些文件时，必须同时更新对应测试**。这是项目约定，也是历史事故的来源
+（见 `docs/known-issues.md`）。
+
+---
+
+## 5. 当前状态
+
+已完成并可用：
+
+- 35 个 MCP 工具，覆盖文件、Git、命令、开发任务、制品、文本传输
+- 四层安全模型全部落地并有测试覆盖
+- Android 暂存验证状态机（含 Profile 热重载）
+- Windows 开发适配器（MSBuild / Electron / 原生）
+- C# 管理员代理，named pipe + 共享密钥
+- Cloudflare 命名隧道与 ngrok 双通道脚本
+
+需要注意的设计约束：
+
+- **工具总数是契约**。`test/development-docs.test.mjs` 断言工具清单长度，
+  新增工具要同步改 README、`.env.example` 和该测试。
+- **`restart_service` 只在托管启动时注册**（`WINMCP_MANAGED_LAUNCH=1`），
+  避免生产实例自己重启自己。
+- **隧道 ID 不写进代码**。`prod-supervisor.mjs` 从
+  `CLOUDFLARE_TUNNEL_UUID` 读取，`stop-prod-service.ps1` 未设置时直接报错退出。
+
+---
+
+## 6. 已知问题
+
+**测试并发偶发失败（既有问题，非新引入）**
+`test/local-dev-server-worker.test.mjs`、`test/development-task-worker.test.mjs`
+里的 server 生命周期用例，在 `--test-concurrency=4` 下偶发超时，
+报 `worker heartbeat lost` 或 `TASK_INTERRUPTED`。
+
+- 单独跑通常通过，全量跑随机 1–3 个失败
+- 已在原始仓库验证同样存在，不是脱敏或改名造成
+- 根因方向：worker 心跳间隔（`DEV_TASK_HEARTBEAT_MS`）与测试等待窗口竞争
+
+**建议的修复方向**：把测试里的等待改为事件驱动而非固定 sleep，
+或让测试显式放宽心跳超时。这是一个适合作为首次贡献的任务。
+
+---
+
+## 7. 下一步建议（按价值排序）
+
+1. **修掉测试并发抖动**（第 6 节）。这是唯一影响 CI 可信度的问题，
+   修完之后 `npm test` 才能真正作为合并门槛。
+2. **给 `/health` 加鉴权或裁剪字段**。当前它无鉴权返回工具清单、
+   `gitCommandPolicy`、`directoryApprovalFallback` 等。对外暴露过多侦查信息。
+3. **补 CI**。`.github/workflows/windows-development.yml` 目前只监听
+   `codex/android-windows-development-environment` 分支，main 上没有跑。
+4. **配置样例的默认值收敛**。`.env.example` 里 `CONSENT_ABSOLUTE_PATH=confirm`
+   是对的，但文档示例偶尔出现 `allow`，需要统一。
+5. **补充 CHANGELOG 与版本策略**。当前是 `1.0.0` 单点，没有发布流程。
+
+---
+
+## 8. 开发约定
+
+**提交前自检：**
+
+```powershell
+npx tsc --noEmit
+$env:AUTH_MODE='pin'; $env:AUTH_PIN='testpin12345'
+node --test --test-concurrency=4 test/*.test.mjs
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/scan-development-secrets.ps1
+```
+
+第三条是密钥扫描脚本，提交前务必跑一次。
+
+**编码规范：**
+
+- 所有源文件 UTF-8，无 BOM
+- 不要引入新的全局状态，除非像 `pinAuth` 那样有明确生命周期
+- 路径处理一律走 `pathGuard`，不要直接 `fs` 拼接
+- 日志一律走 `logger`，它会自动脱敏；不要 `console.log` 敏感值
+
+**分支与合并：**
+
+- `main` 受保护，走 PR
+- 一个 PR 只做一件事，安全边界改动单独提
+- 改了安全相关文件，PR 描述里必须写明威胁模型变化
+
+---
+
+## 9. 常用命令速查
+
+```powershell
+# 构建 / 类型检查
+npm run build
+npx tsc --noEmit
+
+# 测试
+$env:AUTH_MODE='pin'; $env:AUTH_PIN='testpin12345'
+node --test --test-concurrency=4 test/*.test.mjs
+node --test test/某个具体.test.mjs          # 单跑一个
+
+# 启动
+node dist/index.js
+powershell -File scripts/start-winmcp.ps1 -CheckOnly   # 只做预检
+
+# 隧道
+powershell -File scripts/test-cloudflare-tunnel.ps1 -CheckOnly -ConfigPath <path>
+node scripts/prod-supervisor.mjs
+
+# 安全扫描
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/scan-development-secrets.ps1
+
+# 管理员代理（需要管理员权限）
+dotnet test broker/WinMcp.AdminBroker.Tests/WinMcp.AdminBroker.Tests.csproj
+powershell -File scripts/build-admin-broker.ps1
+```
+
+---
+
+## 10. 环境与凭据纪律
+
+**绝对不能提交的东西：**
+
+- `.env`、`.env.test`（`.gitignore` 已覆盖，但请勿用 `git add -f`）
+- `C:\Users\<你>\.cloudflared\*.json`（隧道凭证）
+- `logs/`、`approval.key`、`approvals.json`、`directory-grants.json`
+- 任何真实域名、隧道 UUID、Token、PIN、个人路径
+
+**如果你需要引用自己的隧道**，写进本地 `.env`：
+
+```env
+CLOUDFLARE_TUNNEL_UUID=你的真实UUID
+CLOUDFLARE_CONFIG_PATH=%USERPROFILE%\.cloudflared\config.yml
+```
+
+代码从环境变量读，仓库里永远只有占位符。
+
+---
+
+## 11. 交接检查清单
+
+接手当天应该完成：
+
+- [ ] `npm install && npm run build` 成功
+- [ ] `npx tsc --noEmit` 零错误
+- [ ] 测试跑通，理解第 6 节的偶发失败
+- [ ] 能说清四层安全模型各挡什么
+- [ ] 说得出 `AUTH_MODE=none` 的风险
+- [ ] 知道改工具清单要同步哪三处
+- [ ] 本地 `node dist/index.js` 起得来，`/health` 有响应
+
+完成后，从第 7 节第 1 项开始。
