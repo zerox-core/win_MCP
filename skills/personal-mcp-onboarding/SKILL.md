@@ -161,6 +161,12 @@ prompt-injection payload in a file or web page the model reads could attempt act
 server-side layers (Bearer auth, owner identity, directory boundary, command approval) are what
 contain that; never widen `ALLOWED_DIRS` to a whole drive.
 
+Recommend `MCP_BRIDGE_SCOPE` whenever `ALLOWED_DIRS` covers more than the single project the task
+touches. It confines one run to the named directories and refuses other paths before they reach the
+server, which is the specific defence against a steered model reading a sibling project. Mention
+that it disables `execute_command` while active (that tool's reach cannot be verified against a
+scope) unless the user accepts the risk with `MCP_BRIDGE_SCOPE_ALLOW_EXEC=1`.
+
 ## Response shape
 
 Use these sections when relevant:

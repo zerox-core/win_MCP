@@ -24,6 +24,7 @@ import { McpClient, McpTransportError } from "./mcpClient.js";
 import { Bridge, buildSystemPrompt, type BridgeEvent } from "./bridge.js";
 import { createModelClient } from "./model.js";
 import { createTerminalApproval } from "./approval.js";
+import { SessionScope } from "./scope.js";
 
 interface CliConfig {
   url: string;
@@ -36,6 +37,10 @@ interface CliConfig {
   verbose: boolean;
   /** ask | allow_once | allow_session | allow_permanent | deny | off */
   approve: string;
+  /** Directories this run may touch; empty means no extra confinement. */
+  scopeRoots: string[];
+  /** Permit execute_command even though its effects escape the scope. */
+  allowUnconfined: boolean;
 }
 
 const DEFAULT_BASE_URLS: Record<string, string> = {
@@ -98,6 +103,13 @@ export function readConfig(argv: string[]): { config: CliConfig; instructions: s
     );
   }
 
+  // Comma- or semicolon-separated so Windows paths with drive letters stay
+  // readable (a colon separator would collide with "F:\").
+  const scopeRaw = env("MCP_BRIDGE_SCOPE");
+  const scopeRoots = scopeRaw
+    ? scopeRaw.split(/[;,]/).map((entry) => entry.trim()).filter((entry) => entry.length > 0)
+    : [];
+
   return {
     config: {
       url,
@@ -109,6 +121,8 @@ export function readConfig(argv: string[]): { config: CliConfig; instructions: s
       maxTurns,
       verbose: process.env.MCP_BRIDGE_VERBOSE === "1",
       approve,
+      scopeRoots,
+      allowUnconfined: process.env.MCP_BRIDGE_SCOPE_ALLOW_EXEC === "1",
     },
     instructions: argv,
   };
@@ -130,6 +144,10 @@ function makeEventPrinter(verbose: boolean) {
         } else {
           process.stdout.write("    \u2713\n");
         }
+        break;
+      case "tool_blocked":
+        process.stdout.write(`    \u2298 blocked by session scope\n`);
+        if (verbose) process.stdout.write(`      ${firstLine(event.reason)}\n`);
         break;
       case "limit":
         process.stdout.write(`\n[stopped: ${event.reason}]\n`);
@@ -189,6 +207,12 @@ function usage(): string {
     "                        `ask` prompts in the terminal for every write/command;",
     "                        `off` leaves approvals to the server's own policy",
     "  MCP_BRIDGE_VERBOSE    set to 1 for token and result detail",
+    "  MCP_BRIDGE_SCOPE      comma-separated directories this run may touch;",
+    "                        any tool call outside them is refused before reaching",
+    "                        the server. Example: MCP_BRIDGE_SCOPE=F:\\proj\\a,F:\\proj\\b",
+    "  MCP_BRIDGE_SCOPE_ALLOW_EXEC",
+    "                        set to 1 to allow execute_command while a scope is",
+    "                        active (its effects cannot be verified against it)",
   ].join("\n");
 }
 
@@ -221,13 +245,23 @@ async function main(): Promise<void> {
     model: config.model,
   });
 
+  const scope = new SessionScope({
+    roots: config.scopeRoots,
+    allowUnconfinedTools: config.allowUnconfined,
+  });
+
   const bridge = new Bridge({
     mcp,
     model,
     systemPrompt: buildSystemPrompt({
       hostDescription: `reachable through the win_mcp MCP server at ${config.url}`,
+      extraInstructions: scope.active
+        ? `This session is confined to: ${scope.scopeRoots.join(", ")}. ` +
+          "Paths outside those directories will be refused; do not try variations."
+        : undefined,
     }),
     maxTurns: config.maxTurns,
+    scope,
     onEvent: makeEventPrinter(config.verbose),
   });
 
@@ -237,7 +271,10 @@ async function main(): Promise<void> {
     const tools = await bridge.prepare();
     process.stderr.write(
       `win-mcp bridge \u2014 ${tools.length} tools \u2014 model ${model.label}\n` +
-      `MCP: ${config.url}\n\n`,
+      `MCP: ${config.url}\n` +
+      `Scope: ${scope.describe()}` +
+      (scope.active && !config.allowUnconfined ? " (execute_command blocked)" : "") +
+      "\n\n",
     );
   } catch (error) {
     const message = error instanceof McpTransportError

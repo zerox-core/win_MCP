@@ -17,6 +17,7 @@
 import { McpClient, McpTransportError, type McpToolDefinition } from "./mcpClient.js";
 import { buildNameMap, toFunctionDefinitions, type FunctionDefinition } from "./schema.js";
 import type { ModelClient, Turn, ToolCall } from "./model.js";
+import type { SessionScope } from "./scope.js";
 
 export interface BridgeOptions {
   mcp: McpClient;
@@ -26,6 +27,11 @@ export interface BridgeOptions {
   maxTurns?: number;
   /** Maximum total tool executions per user message. */
   maxToolCalls?: number;
+  /**
+   * Optional per-session filesystem confinement. When active, calls outside the
+   * named roots are refused before they reach the server.
+   */
+  scope?: SessionScope;
   /** Called for progress display; defaults to a no-op. */
   onEvent?: (event: BridgeEvent) => void;
 }
@@ -34,6 +40,7 @@ export type BridgeEvent =
   | { kind: "assistant_text"; text: string }
   | { kind: "tool_call"; name: string; arguments: Record<string, unknown> }
   | { kind: "tool_result"; name: string; text: string; isError: boolean }
+  | { kind: "tool_blocked"; name: string; reason: string }
   | { kind: "limit"; reason: string }
   | { kind: "usage"; inputTokens?: number; outputTokens?: number };
 
@@ -72,6 +79,7 @@ export class Bridge {
   private readonly systemPrompt: string;
   private readonly maxTurns: number;
   private readonly maxToolCalls: number;
+  private readonly scope?: SessionScope;
   private readonly onEvent: (event: BridgeEvent) => void;
   private tools?: McpToolDefinition[];
   private definitions?: FunctionDefinition[];
@@ -83,6 +91,7 @@ export class Bridge {
     this.systemPrompt = options.systemPrompt;
     this.maxTurns = options.maxTurns ?? DEFAULT_MAX_TURNS;
     this.maxToolCalls = options.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
+    this.scope = options.scope;
     this.onEvent = options.onEvent ?? (() => {});
   }
 
@@ -197,6 +206,18 @@ export class Bridge {
       const message = `Unknown tool "${call.name}". Available tools: ${known}`;
       this.onEvent({ kind: "tool_result", name: call.name, text: message, isError: true });
       return { text: message, isError: true };
+    }
+
+    // Session scope is enforced here, before the call leaves the bridge, so a
+    // model steered by a prompt-injection payload cannot widen its own reach.
+    if (this.scope) {
+      const decision = this.scope.check(original, args);
+      if (!decision.allowed) {
+        const message = `Blocked by session scope: ${decision.reason}`;
+        this.onEvent({ kind: "tool_blocked", name: original, reason: decision.reason ?? "" });
+        this.onEvent({ kind: "tool_result", name: original, text: message, isError: true });
+        return { text: message, isError: true };
+      }
     }
 
     try {
