@@ -59,13 +59,11 @@ export function validateTestFiles(
       throw new TestFileError(`unsupported test file extension: ${ext}`);
     }
     const joined = path.resolve(root, raw);
-    const relative = path.relative(realRoot, joined);
-    if (relative.startsWith("..") || path.isAbsolute(relative)) {
-      throw new TestFileError(`test file escapes workspace root: ${raw}`);
-    }
-    // Check for symlinks in the path.
+    // Check for symlinks in the path (logical walk: reject before anything is
+    // followed).
+    const logicalRelative = path.relative(root, joined);
     let current = root;
-    for (const segment of relative.split(path.sep).filter(Boolean)) {
+    for (const segment of logicalRelative.split(path.sep).filter(Boolean)) {
       current = path.join(current, segment);
       try {
         if (fs.lstatSync(current).isSymbolicLink()) {
@@ -89,6 +87,14 @@ export function validateTestFiles(
       }
       if (error instanceof TestFileError) throw error;
       throw new TestFileError(`cannot access test file: ${raw}`);
+    }
+    // Containment is compared in canonical form. `realRoot` is already
+    // canonical, so the candidate must be too: on Windows a workspace root can
+    // arrive as an 8.3 short path (C:\Users\RUNNER~1\...), and comparing it
+    // against a long-form realRoot makes every valid file appear to escape.
+    const relative = path.relative(realRoot, fs.realpathSync.native(joined));
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw new TestFileError(`test file escapes workspace root: ${raw}`);
     }
     if (seen.has(joined)) {
       throw new TestFileError(`duplicate test file: ${raw}`);

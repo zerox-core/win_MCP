@@ -73,10 +73,31 @@ interface CacheEntry {
   result: ResolveResult;
 }
 
+/**
+ * Containment test between a candidate and the allowed roots.
+ *
+ * Callers pass an already-canonical candidate (`realpath`), so each root must
+ * be canonicalized too. On Windows a root can arrive as an 8.3 short path
+ * (`C:\Users\RUNNER~1\...`) while `realpath` yields the long form
+ * (`C:\Users\runneradmin\...`); comparing the two spellings makes a file
+ * inside its own root look like an escape and silently degrades the state
+ * from incompatible/ready to untrusted.
+ */
+function canonicalizeRoot(root: string): string {
+  const absolute = path.resolve(root);
+  try {
+    return fsSync.realpathSync.native(absolute);
+  } catch {
+    // The root may not exist yet; the resolved spelling is the best available
+    // canonical form.
+    return absolute;
+  }
+}
+
 function isWithin(roots: string[], candidate: string): boolean {
   const abs = path.resolve(candidate);
   for (const root of roots) {
-    const rel = path.relative(path.resolve(root), abs);
+    const rel = path.relative(canonicalizeRoot(root), abs);
     if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
       return true;
     }

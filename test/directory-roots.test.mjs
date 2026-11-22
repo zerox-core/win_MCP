@@ -11,8 +11,14 @@ import {
   pathKey,
 } from "../dist/security/directoryRoots.js";
 
+// `os.tmpdir()` can return an 8.3 short path (C:\Users\RUNNER~1\...), while
+// `realpath` returns the long form (C:\Users\runneradmin\...). Production code
+// deliberately reports the long form as the physical root, so the expectations
+// below must be built from a long-form base too.
+const tempBase = await realpath(os.tmpdir());
+
 test("file requests infer the containing directory and bind the physical path", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "directory-root-"));
+  const root = await mkdtemp(path.join(tempBase, "directory-root-"));
   try {
     const file = path.join(root, "project", "file.txt");
     await mkdir(path.dirname(file), { recursive: true });
@@ -26,7 +32,7 @@ test("file requests infer the containing directory and bind the physical path", 
 });
 
 test("directory requests bind the requested directory itself", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "directory-root-existing-"));
+  const root = await mkdtemp(path.join(tempBase, "directory-root-existing-"));
   try {
     const directory = path.join(root, "project");
     await mkdir(directory);
@@ -39,7 +45,7 @@ test("directory requests bind the requested directory itself", async () => {
 });
 
 test("a missing file binds its requested parent through the nearest real ancestor", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "directory-root-missing-"));
+  const root = await mkdtemp(path.join(tempBase, "directory-root-missing-"));
   try {
     const scope = canonicalizeDirectoryScope(
       path.join(root, "new-project", "file.txt"),
@@ -53,7 +59,7 @@ test("a missing file binds its requested parent through the nearest real ancesto
 });
 
 test("physical roots resolve directory symlinks and junctions", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "directory-root-link-"));
+  const root = await mkdtemp(path.join(tempBase, "directory-root-link-"));
   try {
     const target = path.join(root, "target");
     const link = path.join(root, "link");
@@ -80,7 +86,7 @@ test(
 );
 
 test("deduplicateRoots sorts logical roots and collapses physical aliases", () => {
-  const base = path.resolve(os.tmpdir(), "directory-root-deduplicate");
+  const base = path.resolve(tempBase, "directory-root-deduplicate");
   const sharedPhysical = path.join(base, "physical");
   const roots = [
     { logicalRoot: path.join(base, "z"), physicalRoot: sharedPhysical },

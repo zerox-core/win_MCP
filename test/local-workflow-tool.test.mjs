@@ -33,6 +33,28 @@ test("validates selected test files as regular, contained relative paths", async
   assert.throws(() => validateTestFiles(["tests/auth.test.ts", "tests/auth.test.ts"], dir), /duplicate/i);
 });
 
+test("containment compares canonical paths so a non-canonical root still matches", async () => {
+  // Windows CI hands out workspace roots that are not byte-identical to their
+  // canonical form (an 8.3 short path such as C:\Users\RUNNER~1\...). The
+  // canonical form is what the containment check compares against, so a valid
+  // file must not be reported as escaping just because the root spelling
+  // differs.
+  const dir = await workspace();
+  const variants = [
+    dir + path.sep,
+    path.join(dir, ".", "tests", ".."),
+  ];
+  for (const root of variants) {
+    assert.notEqual(path.resolve(root), undefined);
+    const absolute = validateTestFiles(["tests/auth.test.ts"], root);
+    assert.deepEqual(relativeTestPaths(absolute, root), ["tests/auth.test.ts"]);
+  }
+  // Escapes stay rejected regardless of how the root is spelled.
+  for (const root of variants) {
+    assert.throws(() => validateTestFiles(["../escape.test.ts"], root), TestFileError);
+  }
+});
+
 test("builds only fixed PNPM actions and skips selected tests without inputs", () => {
   const withTest = buildWorkflowSteps(recipeSteps, root, ["tests/auth.test.ts"]);
   const selected = withTest.find((step) => step.id === "test_selected");
