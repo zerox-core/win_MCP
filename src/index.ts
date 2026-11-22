@@ -378,7 +378,10 @@ const handler = createMcpHandler(createMcpServer);
 // that key never has to be typed or copied by hand.
 const clientRegistry = new ClientRegistry(APPROVAL_DATA_DIR);
 const pairingRegistry = new PairingCodeRegistry();
-setClientKeyVerifier((candidate) => clientRegistry.matches(candidate));
+setClientKeyVerifier(
+  (candidate) => clientRegistry.matches(candidate),
+  () => clientRegistry.count() > 0,
+);
 
 const mcpProtocol = process.env.MCP_PROTOCOL?.trim() || "http";
 const portIsHttps = process.env.MCP_PROTOCOL?.trim() === "https";
@@ -504,7 +507,8 @@ app.all(MCP_ENDPOINT, async (req: Request, res: Response) => {
 // diagnostics, so monitoring and troubleshooting both keep working.
 
 app.get("/health", (req: Request, res: Response) => {
-  const authorized = isAuthorizedToken(extractToken(req.headers.authorization));
+  const token = extractToken(req.headers.authorization);
+  const authorized = Boolean(token && isAuthorizedToken(token));
 
   const minimal = {
     status: "ok",

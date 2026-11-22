@@ -102,6 +102,7 @@ test("PIN authentication is isolated per request identity", async () => {
   child.stdout.on("data", (chunk) => (output += chunk));
   child.stderr.on("data", (chunk) => (output += chunk));
 
+  let clientKey;
   let requestId = 0;
   async function callTool(name, args, userId) {
     const response = await fetch(`${baseUrl}/mcp`, {
@@ -109,6 +110,7 @@ test("PIN authentication is isolated per request identity", async () => {
       headers: {
         "content-type": "application/json",
         accept: "application/json, text/event-stream",
+        authorization: `Bearer ${clientKey}`,
         "x-test-user": userId,
       },
       body: JSON.stringify({
@@ -158,7 +160,7 @@ test("PIN authentication is isolated per request identity", async () => {
     // Clients are per-pairing and only digests are persisted, so pair one to
     // get a credential that unlocks the full diagnostics view.
     const paired = await pairClient(baseUrl, output, "security-auth-test");
-    const clientKey = paired.clientKey;
+    clientKey = paired.clientKey;
     const fullHealth = await (
       await fetch(`${baseUrl}/health`, {
         headers: { authorization: `Bearer ${clientKey}` },
@@ -181,6 +183,7 @@ test("PIN authentication is isolated per request identity", async () => {
       headers: {
         "content-type": "application/json",
         accept: "application/json, text/event-stream",
+        authorization: `Bearer ${clientKey}`,
         "x-test-user": "alice",
       },
       body: JSON.stringify({
@@ -225,6 +228,7 @@ test("PIN authentication is isolated per request identity", async () => {
       headers: {
         "content-type": "application/json",
         accept: "application/json, text/event-stream",
+        authorization: `Bearer ${clientKey}`,
         "x-test-user": "alice",
       },
       body: JSON.stringify({

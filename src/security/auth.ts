@@ -24,9 +24,14 @@ import { logger } from "./logger.js";
  * and so `AUTH_MODE` continues to work without a pairing store.
  */
 let clientKeyMatches: ((candidate: string) => boolean) | undefined;
+let hasPairedClients: (() => boolean) | undefined;
 
-export function setClientKeyVerifier(verifier: (candidate: string) => boolean): void {
+export function setClientKeyVerifier(
+  verifier: (candidate: string) => boolean,
+  pairedClientsExist?: () => boolean,
+): void {
   clientKeyMatches = verifier;
+  hasPairedClients = pairedClientsExist;
 }
 
 const CORS_HEADERS = [
@@ -68,13 +73,21 @@ function tokenMatches(candidate: string, expected: string): boolean {
  * True when the candidate is a valid transport credential.
  *
  * Two credentials are accepted: the operator-configured shared token
- * (`MCP_AUTH_TOKEN`) and the persistent per-install client key issued through
- * pairing. Both are compared in constant time.
+ * (`MCP_AUTH_TOKEN`) and the per-client key issued through pairing. Both are
+ * compared in constant time.
+ *
+ * A supplied-but-wrong token always fails. A missing token is accepted only
+ * in explicit local-development mode: no shared token configured AND nothing
+ * ever paired. Once any client pairs, the empty-token path closes — otherwise
+ * pairing would protect a key while anyone could still connect with no
+ * Authorization header at all, which defeats what pairing is for.
  */
 export function isAuthorizedToken(token: string | null | undefined): boolean {
-  if (!token) return false;
-  if (MCP_AUTH_TOKEN && tokenMatches(token, MCP_AUTH_TOKEN)) return true;
-  return clientKeyMatches ? clientKeyMatches(token) : false;
+  if (token) {
+    if (MCP_AUTH_TOKEN && tokenMatches(token, MCP_AUTH_TOKEN)) return true;
+    return clientKeyMatches ? clientKeyMatches(token) : false;
+  }
+  return !AUTH_ENABLED && !(hasPairedClients && hasPairedClients());
 }
 
 export function corsPreflight(
@@ -109,19 +122,19 @@ export function authMiddleware(
   const token = extractToken(req.headers.authorization);
 
   // --- Auth check ---
-  if (AUTH_ENABLED) {
-    if (!isAuthorizedToken(token)) {
-      logger.warn("transport_authentication_failed", { ip: req.ip });
-      res.status(401).json({
-        jsonrpc: "2.0",
-        error: {
-          code: -32001,
-          message: "Unauthorized: invalid or missing Bearer token",
-        },
-        id: null,
-      });
-      return;
-    }
+  // isAuthorizedToken encodes the full policy, including the paired-client
+  // case where MCP_AUTH_TOKEN itself is empty.
+  if (!isAuthorizedToken(token)) {
+    logger.warn("transport_authentication_failed", { ip: req.ip });
+    res.status(401).json({
+      jsonrpc: "2.0",
+      error: {
+        code: -32001,
+        message: "Unauthorized: invalid or missing Bearer token",
+      },
+      id: null,
+    });
+    return;
   }
 
   // --- Rate limit check ---

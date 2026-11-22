@@ -134,6 +134,7 @@ export async function startMcpFixture({
     const headers = {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
+      ...authHeaders,
     };
     if (identity !== null) headers["x-test-user"] = identity;
     let requestParams = params;
