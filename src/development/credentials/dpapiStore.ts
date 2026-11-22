@@ -21,6 +21,7 @@ import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { safeRuntimeEnvironment } from "../tasks/runtimeEnvironment.js";
+import { renameWithRetry } from "../../security/atomicReplace.js";
 import type {
   CredentialKind,
   CredentialMetadata,
@@ -229,7 +230,7 @@ export class LocalCredentialStore {
     fs.mkdirSync(this.indexDir, { recursive: true });
     const tmp = `${this.indexPath}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(this.entries, null, 2), { mode: 0o600 });
-    fs.renameSync(tmp, this.indexPath);
+    renameWithRetry(tmp, this.indexPath);
     // Re-assert owner-only mode (rename may preserve tmp mode on some systems).
     try {
       fs.chmodSync(this.indexPath, 0o600);

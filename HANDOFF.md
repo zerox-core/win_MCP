@@ -38,11 +38,11 @@ npx tsc --noEmit          # 类型检查，应为 0 错误
 
 ```powershell
 $env:AUTH_MODE='pin'
-$env:AUTH_PIN='testpin12345'
+$env:AUTH_PIN='CHANGE-ME-LOCAL-PIN'
 node --test --test-concurrency=4 test/*.test.mjs
 ```
 
-预期：945 个用例，940+ 通过。详见第 6 节"已知问题"。
+预期：952 个用例全部通过（原 945，新增 7 个 `atomic-replace` 用例）。
 
 本地启动前，先复制配置：
 
@@ -160,31 +160,53 @@ docs/                     # 面向使用者的文档
 
 ## 6. 已知问题
 
-**测试并发偶发失败（既有问题，非新引入）**
-`test/local-dev-server-worker.test.mjs`、`test/development-task-worker.test.mjs`
-里的 server 生命周期用例，在 `--test-concurrency=4` 下偶发超时，
-报 `worker heartbeat lost` 或 `TASK_INTERRUPTED`。
+**测试并发抖动（已修复，2026-11-22）**
 
-- 单独跑通常通过，全量跑随机 1–3 个失败
-- 已在原始仓库验证同样存在，不是脱敏或改名造成
-- 根因方向：worker 心跳间隔（`DEV_TASK_HEARTBEAT_MS`）与测试等待窗口竞争
+历史上 `test/local-dev-server-worker.test.mjs`、`test/development-task-worker.test.mjs`
+在 `--test-concurrency=4` 下随机失败，报 `worker heartbeat lost` 或 `TASK_INTERRUPTED`
+（约 25%–75% 的轮次会有 1–3 个失败）。
 
-**建议的修复方向**：把测试里的等待改为事件驱动而非固定 sleep，
-或让测试显式放宽心跳超时。这是一个适合作为首次贡献的任务。
+**根因不是心跳间隔，而是 Windows 的原子替换。**
+
+`src/development/tasks/store.ts` 用「临时文件 + `renameSync`」写 `metadata.json`。
+Windows 上 `rename` 覆盖一个正被其他句柄打开的文件会直接失败（`EPERM`/`EBUSY`/`EACCES`），
+不会等待。协调器在轮询 `metadata.json` 的同时 worker 在重写它，于是：
+
+1. worker 的状态写入抛 `EPERM` → 被 `catch {}` 吞掉 → 状态推进失败、任务卡在 `spawn`/`server:starting`；
+2. 协调器等不到心跳 → 把任务判成 `interrupted`；
+3. 测试看到既不是 `running` 也不是 `cancelled`，超时失败。
+
+同样的裸 `renameSync` 还出现在心跳、审批、目录授权等 6 处写入路径上。
+
+**修复**：新增 `src/security/atomicReplace.ts` 的 `renameWithRetry`，
+只对这三个 Windows 共享冲突码做有界重试（最多 40 次，指数退避，单次上限 400ms），
+其余错误（`ENOENT`/`EXDEV`/`EINVAL`…）立刻抛出，不掩盖真实问题。
+已接入 `tasks/store.ts`、`tasks/workerProtocol.ts`、`security/approvalStore.ts`、
+`security/directoryGrantStore.ts`、`workspaces/context.ts`、
+`environment/planStore.ts`、`credentials/dpapiStore.ts`。
+
+回归测试：`test/atomic-replace.test.mjs`（7 个用例，覆盖退避序列、
+错误分类、真实文件系统替换、任务元数据争用）。
+
+**注意**：这类问题只在 Windows 上出现，Linux CI 永远复现不到。
+如果你在新增「临时文件 + rename」的写入路径，请直接用 `renameWithRetry`，
+不要写裸 `fs.renameSync`。
 
 ---
 
 ## 7. 下一步建议（按价值排序）
 
-1. **修掉测试并发抖动**（第 6 节）。这是唯一影响 CI 可信度的问题，
-   修完之后 `npm test` 才能真正作为合并门槛。
+1. ~~修掉测试并发抖动~~ **已完成**（第 6 节）。`npm test` 现在可以作为合并门槛。
 2. **给 `/health` 加鉴权或裁剪字段**。当前它无鉴权返回工具清单、
    `gitCommandPolicy`、`directoryApprovalFallback` 等。对外暴露过多侦查信息。
-3. **补 CI**。`.github/workflows/windows-development.yml` 目前只监听
-   `codex/android-windows-development-environment` 分支，main 上没有跑。
+3. ~~补 CI~~ **已完成**：`.github/workflows/windows-development.yml`
+   已监听 `main`，并注入测试用 `AUTH_PIN`。
 4. **配置样例的默认值收敛**。`.env.example` 里 `CONSENT_ABSOLUTE_PATH=confirm`
    是对的，但文档示例偶尔出现 `allow`，需要统一。
 5. **补充 CHANGELOG 与版本策略**。当前是 `1.0.0` 单点，没有发布流程。
+6. **把剩余的裸 `renameSync` 也收敛**。`textTransfers/`、`artifacts/`、
+   `android/projectProvider.ts` 等处仍有 staging→rename；其中会覆盖已存在
+   文件的场景应改用 `renameWithRetry`（纯目录 rename 不涉及文件共享冲突，可不动）。
 
 ---
 
@@ -194,7 +216,7 @@ docs/                     # 面向使用者的文档
 
 ```powershell
 npx tsc --noEmit
-$env:AUTH_MODE='pin'; $env:AUTH_PIN='testpin12345'
+$env:AUTH_MODE='pin'; $env:AUTH_PIN='CHANGE-ME-LOCAL-PIN'
 node --test --test-concurrency=4 test/*.test.mjs
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/scan-development-secrets.ps1
 ```
@@ -224,7 +246,7 @@ npm run build
 npx tsc --noEmit
 
 # 测试
-$env:AUTH_MODE='pin'; $env:AUTH_PIN='testpin12345'
+$env:AUTH_MODE='pin'; $env:AUTH_PIN='CHANGE-ME-LOCAL-PIN'
 node --test --test-concurrency=4 test/*.test.mjs
 node --test test/某个具体.test.mjs          # 单跑一个
 

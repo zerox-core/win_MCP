@@ -32,6 +32,7 @@ import type {
 } from "./types.js";
 import type { DevServerRuntime, DevServerScope, DevServerState } from "../servers/contracts.js";
 import { isSensitiveEnvEntry } from "./redaction.js";
+import { renameWithRetry } from "../../security/atomicReplace.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CREDENTIAL_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -774,7 +775,10 @@ export class DevelopmentTaskStore {
       } finally {
         fs.closeSync(fd);
       }
-      fs.renameSync(temporary, targetPath);
+      // Metadata is polled by the coordinator and rewritten by detached
+      // workers, so a plain rename races with concurrent readers and fails
+      // with a transient Windows sharing violation (EPERM/EBUSY).
+      renameWithRetry(temporary, targetPath);
       try { fs.chmodSync(targetPath, 0o600); } catch {}
     } finally {
       try { fs.rmSync(temporary, { force: true }); } catch {}

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { renameWithRetry } from "./atomicReplace.js";
 import {
   ALLOWED_DIRS,
   APPROVAL_DATA_DIR,
@@ -284,7 +285,7 @@ export class DirectoryGrantStore {
       } finally {
         fs.closeSync(fd);
       }
-      fs.renameSync(temporary, this.filePath);
+      renameWithRetry(temporary, this.filePath);
       try { fs.chmodSync(this.filePath, 0o600); } catch {}
     } finally {
       try { fs.rmSync(temporary, { force: true }); } catch {}

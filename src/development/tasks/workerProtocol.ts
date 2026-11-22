@@ -14,6 +14,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { renameWithRetry } from "../../security/atomicReplace.js";
 
 export const TASK_DIR_ENV = "WINMCP_TASK_DIR";
 export const WORKER_TOKEN_ENV = "WINMCP_WORKER_TOKEN";
@@ -86,7 +87,11 @@ export function writeHeartbeat(taskDir: string, beat: WorkerHeartbeat): void {
     } finally {
       fs.closeSync(fd);
     }
-    fs.renameSync(temporary, file);
+    // The coordinator polls this file while the worker replaces it; on Windows
+    // the concurrent read makes the rename intermittently fail (EPERM/EBUSY).
+    // Losing a beat is not fatal here, but a lost final beat can look like a
+    // dead worker, so retry the transient conflict instead of dropping it.
+    renameWithRetry(temporary, file);
   } finally {
     try { fs.rmSync(temporary, { force: true }); } catch {}
   }

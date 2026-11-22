@@ -14,6 +14,7 @@ import { createHmac } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { APPROVAL_STATE_SECRET } from "../../config.js";
+import { renameWithRetry } from "../../security/atomicReplace.js";
 import type { EnvironmentPlan } from "./planner.js";
 import { canonicalPlanBody, verifyPlanHmac } from "./planner.js";
 
@@ -118,7 +119,7 @@ export class PlanStore {
     const file = this.fileFor(plan.id);
     const tmp = `${file}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(plan), { mode: 0o600 });
-    fs.renameSync(tmp, file);
+    renameWithRetry(tmp, file);
   }
 }
 

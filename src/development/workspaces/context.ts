@@ -14,6 +14,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { renameWithRetry } from "../../security/atomicReplace.js";
 import {
   WORKSPACE_PHASES,
   validateWorkspaceTransition,
@@ -318,7 +319,7 @@ export class WorkspaceContextStore {
       } finally {
         fs.closeSync(fd);
       }
-      fs.renameSync(temporary, file);
+      renameWithRetry(temporary, file);
       try {
         fs.chmodSync(file, 0o600);
       } catch {

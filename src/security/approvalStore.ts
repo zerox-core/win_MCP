@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { APPROVAL_DATA_DIR } from "../config.js";
+import { renameWithRetry } from "./atomicReplace.js";
 
 export type ApprovalSubjectKind =
   | "command" | "origin" | "path" | "paths"
@@ -144,7 +145,7 @@ export class ApprovalStore {
       } finally {
         fs.closeSync(fd);
       }
-      fs.renameSync(temporary, this.filePath);
+      renameWithRetry(temporary, this.filePath);
       try { fs.chmodSync(this.filePath, 0o600); } catch {}
     } finally {
       try { fs.rmSync(temporary, { force: true }); } catch {}

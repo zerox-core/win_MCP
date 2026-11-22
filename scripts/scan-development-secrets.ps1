@@ -51,6 +51,22 @@ $patterns = @(
     @{ Label = "private-key-marker";    Regex = '-----BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY-----' }
 )
 
+# --- Sanitizer fixtures ---
+# These files exist to prove that redaction works, so they necessarily contain
+# real-format tokens and private-key markers as *inputs*. Flagging them makes
+# the scan permanently red and trains people to ignore it, which is worse than
+# the false positive. Only the two marker categories are excused, and only in
+# these files: a live secret, a key file, or a credential blob in the same file
+# is still reported, and any new file needs its own deliberate entry here.
+$sanitizerFixturePaths = @(
+    "test/android-workflow-state-store.test.mjs"
+)
+function Test-SanitizerFixture {
+    param([string]$RelPath, [string]$Category)
+    if ($Category -notin @("bearer-token-header", "private-key-marker")) { return $false }
+    return $sanitizerFixturePaths -contains $RelPath
+}
+
 # --- Scan tracked working-tree files ---
 $tracked = git -C $projectDir ls-files
 foreach ($rel in $tracked) {
@@ -67,7 +83,7 @@ foreach ($rel in $tracked) {
     $text = Get-Content -LiteralPath $full -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
     if (-not $text) { continue }
     foreach ($p in $patterns) {
-        if ($text -match $p.Regex) {
+        if ((-not (Test-SanitizerFixture -RelPath $rel -Category $p.Label)) -and ($text -match $p.Regex)) {
             $findings += [pscustomobject]@{ Category = $p.Label; Location = "file:$rel" }
         }
     }
@@ -103,7 +119,7 @@ git -C $projectDir -c core.quotepath=false log --all --root -m -p --full-history
         }
         $location = "object:$($script:currentCommit):$($script:currentPath)"
         foreach ($p in $patterns) {
-            if ($line -match $p.Regex) {
+            if ((-not (Test-SanitizerFixture -RelPath $script:currentPath -Category $p.Label)) -and ($line -match $p.Regex)) {
                 $script:findings += [pscustomobject]@{ Category = $p.Label; Location = $location }
             }
         }
