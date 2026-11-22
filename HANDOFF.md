@@ -192,19 +192,55 @@ Windows 上 `rename` 覆盖一个正被其他句柄打开的文件会直接失�
 如果你在新增「临时文件 + rename」的写入路径，请直接用 `renameWithRetry`，
 不要写裸 `fs.renameSync`。
 
+**CI 从「永不运行」到「跑通」修复的其余环节（同批，2026-11-22）**
+
+`npm test` 之前其实从来没在 CI 跑过测试：
+
+- `node --test test/*.test.mjs` 依赖 shell 展开通配符，Windows 的 PowerShell 不展开，
+  Node 收到字面量 `test/*.test.mjs` 就报 `Could not find`。本地能过是因为交互式 shell
+  先展开了。现改由 `scripts/run-tests.mjs` 自己展开，任何 shell/Node 版本一致。
+- 测试跑起来后暴露 13 个失败，根因是 Windows 8.3 短路径：`os.tmpdir()` 返回
+  `C:\Users\RUNNER~1\...`，而 `realpath` 返回 `C:\Users\runneradmin\...`。
+  生产代码里 `trustedExecutable.isWithin` 和 `web/testFiles.validateTestFiles`
+  拿已规范化的路径去比未规范化的根，导致合法文件被判「逃逸根」——
+  前者把 `incompatible` 降级成 `untrusted`，后者让 web 工作流在这类机器上完全不可用。
+  两处都改为两侧同一规范形式比较；测试侧改为从规范化临时根构造期望值。
+- Python e2e 缺 `httpx`；装上后又因控制台 cp1252 编码无法打印 `→` 而崩溃（断言其实全过）。
+  现安装依赖并让 stdout/stderr 以 `errors="replace"` 输出。
+- e2e 里工具清单硬编码为 36，实际已是 42（7 个工具新增后没同步）。现改为单点
+  维护的 `expected_tools` 集合，并新增一条 `/health` 与 `tools/list` 一致性断言。
+
+**仍然失败的一步：Production audit。**
+`npm audit --omit=dev` 报 6 个漏洞（1 critical / 4 high / 1 moderate）：
+
+| 包 | 严重度 | 说明 |
+|---|---|---|
+| `proxy-addr` ≤2.0.7 | critical | IPv4-mapped IPv6 信任子网导致 IP 伪造 |
+| `body-parser` <1.20.9 | high | 压缩请求体尾部字节 DoS |
+| `zod` <4.6.6 | high | 超大受约束集合校验时内存耗尽 |
+| `qs` ≤6.16.0 | moderate | 括号键逗号解析绕过数组上限 / DoS（3 条） |
+
+`zod` 由 `@modelcontextprotocol/core` 传递依赖引入，因此升级可能牵动 MCP SDK。
+`npm audit fix` 声称都能修，但本机当时连不上 registry 未能验证。
+**这是独立的依赖升级任务，需要单独评估（尤其 zod 大版本与 MCP SDK 的兼容性），
+不要和别的改动混在一个 PR 里。**
+
 ---
 
 ## 7. 下一步建议（按价值排序）
 
 1. ~~修掉测试并发抖动~~ **已完成**（第 6 节）。`npm test` 现在可以作为合并门槛。
-2. **给 `/health` 加鉴权或裁剪字段**。当前它无鉴权返回工具清单、
+2. **清掉 `npm audit` 的 6 个漏洞**（第 6 节末）。这是 CI 上唯一还红的一步，
+   也是当前唯一 known security debt。注意 `zod` 是 `@modelcontextprotocol/core`
+   的传递依赖，升级前先确认 SDK 兼容性。
+3. **给 `/health` 加鉴权或裁剪字段**。当前它无鉴权返回工具清单、
    `gitCommandPolicy`、`directoryApprovalFallback` 等。对外暴露过多侦查信息。
-3. ~~补 CI~~ **已完成**：`.github/workflows/windows-development.yml`
-   已监听 `main`，并注入测试用 `AUTH_PIN`。
-4. **配置样例的默认值收敛**。`.env.example` 里 `CONSENT_ABSOLUTE_PATH=confirm`
+4. ~~补 CI~~ **已完成**：`.github/workflows/windows-development.yml`
+   已监听 `main`，注入测试用 `AUTH_PIN`，Node / Broker / Python 三个套件都能跑通。
+5. **配置样例的默认值收敛**。`.env.example` 里 `CONSENT_ABSOLUTE_PATH=confirm`
    是对的，但文档示例偶尔出现 `allow`，需要统一。
-5. **补充 CHANGELOG 与版本策略**。当前是 `1.0.0` 单点，没有发布流程。
-6. **把剩余的裸 `renameSync` 也收敛**。`textTransfers/`、`artifacts/`、
+6. **补充 CHANGELOG 与版本策略**。当前是 `1.0.0` 单点，没有发布流程。
+7. **把剩余的裸 `renameSync` 也收敛**。`textTransfers/`、`artifacts/`、
    `android/projectProvider.ts` 等处仍有 staging→rename；其中会覆盖已存在
    文件的场景应改用 `renameWithRetry`（纯目录 rename 不涉及文件共享冲突，可不动）。
 
@@ -222,6 +258,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/scan-development-sec
 ```
 
 第三条是密钥扫描脚本，提交前务必跑一次。
+
+**关于 `node --test test/*.test.mjs`**：交互式 PowerShell 会先展开通配符，所以这样写能跑；
+但在 CI 等非交互环境不会展开。要得到和 CI 一致的结果，用 `npm test`
+（内部走 `scripts/run-tests.mjs`，自己展开，任何 shell 都一样）。
 
 **编码规范：**
 
@@ -247,8 +287,13 @@ npx tsc --noEmit
 
 # 测试
 $env:AUTH_MODE='pin'; $env:AUTH_PIN='CHANGE-ME-LOCAL-PIN'
-node --test --test-concurrency=4 test/*.test.mjs
+npm test                                   # 与 CI 一致（推荐）
+node --test --test-concurrency=4 test/*.test.mjs   # 也行，但依赖 shell 展开通配符
 node --test test/某个具体.test.mjs          # 单跑一个
+
+# Python e2e（需要 httpx）
+py -m pip install httpx
+py test/e2e_test.py
 
 # 启动
 node dist/index.js
@@ -260,6 +305,9 @@ node scripts/prod-supervisor.mjs
 
 # 安全扫描
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/scan-development-secrets.ps1
+
+# 依赖漏洞
+npm audit --omit=dev --registry=https://registry.npmjs.org
 
 # 管理员代理（需要管理员权限）
 dotnet test broker/WinMcp.AdminBroker.Tests/WinMcp.AdminBroker.Tests.csproj
