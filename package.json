@@ -4,12 +4,15 @@
   "description": "Expose local filesystem to Feishu Aily AI assistant via MCP Streamable HTTP — secure, authenticated, and ngrok-ready",
   "type": "module",
   "main": "dist/index.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test --test-concurrency=4 test/*.test.mjs"
+    "test": "npm run build && node scripts/run-tests.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/express": "^2.0.0-beta.5",
